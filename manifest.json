@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "PagePath · 网页一笔画",
+  "version": "1.0.0",
+  "description": "The webpage is the level. 把当前网页的空白变成一笔画关卡，所有分析均在本地完成。",
+  "minimum_chrome_version": "102",
+  "permissions": ["activeTab", "scripting"],
+  "background": { "service_worker": "src/background.js" },
+  "action": {
+    "default_title": "PagePath · 点击开始 / 关闭",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+  },
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'" }
+}

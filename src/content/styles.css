@@ -1,0 +1,8 @@
+/*
+ * PagePath uses a Shadow DOM overlay to keep webpage styles intact and to avoid
+ * site CSS changing the game controls. The authoritative stylesheet is the
+ * P.OVERLAY_CSS template in overlay.js, injected into that shadow root.
+ *
+ * This file intentionally contains no global selectors. Do not add it to the
+ * manifest's content-script CSS list: global rules cannot style a shadow root.
+ */
