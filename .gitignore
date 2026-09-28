@@ -1,0 +1,29 @@
+node_modules/
+/dist/
+/test-results/
+/.browser-profile*/
+/pagepath-mv3-*/
+/shuoming.md
+*.log
+
+# Local credentials and machine-specific settings.
+.env
+.env.*
+!.env.example
+/.npmrc
+/.credentials/
+/credentials*.json
+/*.pem
+/*.key
+/*.p12
+/*.pfx
+/id_rsa
+/id_ed25519
+
+# Local editor and operating-system files.
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
