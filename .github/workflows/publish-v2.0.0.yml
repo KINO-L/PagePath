@@ -1,0 +1,103 @@
+name: Publish v2.0.0 (temporary)
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-v2.0.0.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pagepath-publish-v2.0.0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'KINO-L/PagePath' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 1225af3c5f8f3122a405ea3fb24d8af45ed3210d
+          persist-credentials: false
+      - name: Verify version
+        shell: pwsh
+        run: |
+          $manifest = Get-Content manifest.json -Raw | ConvertFrom-Json
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($manifest.version -ne '2.0.0' -or $package.version -ne '2.0.0') { throw 'Unexpected release version.' }
+          if ((git rev-parse HEAD) -ne '1225af3c5f8f3122a405ea3fb24d8af45ed3210d') { throw 'Unexpected release source.' }
+      - name: Test
+        run: npm test
+      - name: Package
+        shell: pwsh
+        run: ./scripts/package.ps1
+      - name: Publish and update release notes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = 'v2.0.0'
+          $commit = '1225af3c5f8f3122a405ea3fb24d8af45ed3210d'
+          $archive = Join-Path $PWD 'dist/PagePath-v2.0.0.zip'
+          $notes = @'
+          PagePath 2.0.0 将当前网页变成水墨风格的一笔画与迷宫关卡。
+          
+          - 截图 + 本地 OpenCV 分析真实视觉轮廓，小型 DOM 元素辅助合并障碍。
+          - 单击砚台后直接移动鼠标绘制，失败或完成后恢复普通鼠标。
+          - 萌新、糕手、神仙三档一笔画，按实际移动距离消耗墨水；提示仅显示参考路线。
+          - 新增「第二关」网页迷宫：原障碍占比 20%、分散度 30/48 后解锁，起终点唯一通路、无限墨水、自行探索。
+          - 隐藏细墙靠近时显示红色碰撞边界，悬浮栏可拖动并在绘制时折叠。
+          - 全程在浏览器本地运行，不上传网页或游戏数据。
+          
+          下载下方 `PagePath-v2.0.0.zip` 并解压，在 Chrome / Edge 扩展管理页开启开发者模式，选择「加载已解压的扩展程序」。更新后重新加载扩展并刷新网页。
+          
+          [使用指南](https://github.com/KINO-L/PagePath/blob/v2.0.0/docs/USAGE.md) · [更新记录](https://github.com/KINO-L/PagePath/blob/v2.0.0/CHANGELOG.md)
+          '@
+          $notesPath = Join-Path $env:RUNNER_TEMP 'pagepath-v2.0.0-notes.md'
+          [IO.File]::WriteAllText($notesPath, $notes, [Text.UTF8Encoding]::new($false))
+          $releaseList = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read releases.' }
+          $existing = @($releaseList | Where-Object tag_name -eq $tag)
+          if ($existing.Count -gt 1) { throw 'Unexpected duplicate releases.' }
+          $refs = gh api "repos/$repo/git/matching-refs/tags/$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify version tag.' }
+          $existingRef = @($refs | Where-Object ref -eq "refs/tags/$tag")
+          if ($existingRef.Count -gt 0 -and ($existingRef[0].object.type -ne 'commit' -or $existingRef[0].object.sha -ne $commit)) { throw 'Version tag points to a different commit.' }
+          if ($existing.Count -eq 0) {
+            gh release create $tag $archive --repo $repo --target $commit --title 'PagePath v2.0.0' --notes-file $notesPath --latest
+            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed.' }
+          } else {
+            $release = $existing[0]
+            if ($release.draft) {
+              if ($release.target_commitish -ne $commit) { throw 'Draft targets a different commit.' }
+            } else {
+              $ref = gh api "repos/$repo/git/ref/tags/$tag" | ConvertFrom-Json
+              if ($LASTEXITCODE -ne 0 -or $ref.object.type -ne 'commit' -or $ref.object.sha -ne $commit) { throw 'Published version tag differs from release source.' }
+            }
+            if (-not @($release.assets | Where-Object name -eq 'PagePath-v2.0.0.zip').Count) {
+              gh release upload $tag $archive --repo $repo
+              if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed.' }
+            }
+            gh release edit $tag --repo $repo --draft=false --notes-file $notesPath --latest
+            if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
+          }
+          $oldRelease = gh api "repos/$repo/releases/tags/v1.0.0" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read v1.0.0 notes.' }
+          $report = '安装包仅含运行文件与用户文档，原始需求、旧压缩包、测试产物和开发依赖均未包含。已通过 104 项算法、游戏与打包测试，以及六类页面和真实 MV3 扩展验收。'
+          if ($oldRelease.body.Contains($report)) {
+            $oldNotesPath = Join-Path $env:RUNNER_TEMP 'pagepath-v1.0.0-notes.md'
+            $cleaned = $oldRelease.body.Replace($report, '').Replace("`n`n`n`n", "`n`n").Trim()
+            [IO.File]::WriteAllText($oldNotesPath, $cleaned, [Text.UTF8Encoding]::new($false))
+            gh release edit 'v1.0.0' --repo $repo --notes-file $oldNotesPath
+            if ($LASTEXITCODE -ne 0) { throw 'Legacy release notes update failed.' }
+          }
+          Get-FileHash -LiteralPath $archive -Algorithm SHA256 | Select-Object Hash
+          gh release view $tag --repo $repo --json url,tagName,isDraft,assets
+          if ($LASTEXITCODE -ne 0) { throw 'Release verification failed.' }
