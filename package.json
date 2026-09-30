@@ -1,16 +1,20 @@
 {
   "name": "pagepath",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Turn webpage whitespace into an ink-brush puzzle. A local-only Manifest V3 browser extension.",
+  "description": "Turn webpage whitespace into ink-brush puzzles and mazes. A local-only Manifest V3 browser extension.",
   "homepage": "https://github.com/KINO-L/PagePath#readme",
   "repository": { "type": "git", "url": "https://github.com/KINO-L/PagePath.git" },
   "bugs": { "url": "https://github.com/KINO-L/PagePath/issues" },
   "engines": { "node": ">=20" },
   "scripts": {
-    "test": "node --test tests/core.test.cjs tests/difficulty.test.cjs tests/modes.test.cjs tests/variation.test.cjs tests/trail.test.cjs tests/extension.test.cjs tests/game.test.cjs",
+    "test": "node --test tests/core.test.cjs tests/difficulty.test.cjs tests/modes.test.cjs tests/variation.test.cjs tests/trail.test.cjs tests/extension.test.cjs tests/game.test.cjs tests/pixel-map.test.cjs tests/map-codec.test.cjs tests/compact-mask.test.cjs tests/maze.test.cjs tests/maze-cleanup.test.cjs tests/maze-noisy.test.cjs tests/maze-route.test.cjs tests/maze-connectors.test.cjs",
+    "test:maze": "node --test tests/maze.test.cjs tests/maze-cleanup.test.cjs tests/maze-noisy.test.cjs tests/maze-route.test.cjs tests/maze-connectors.test.cjs && node tests/maze-browser.cjs",
     "test:browser": "node tests/browser.test.cjs",
     "test:analysis": "node tests/page-analysis.cjs",
+    "test:vision": "node tests/image-segmentation.cjs",
+    "test:hybrid": "node tests/compact-dom.cjs && node tests/hybrid-map.cjs",
+    "test:opencv": "node tests/opencv-runtime.cjs",
     "test:ui": "node tests/ink-ui.cjs",
     "test:mv3": "node tests/mv3.test.cjs",
     "demo": "node scripts/serve.cjs"

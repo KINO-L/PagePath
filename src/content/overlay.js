@@ -10,9 +10,11 @@
     :host { color-scheme: light; }
     *, *::before, *::after { box-sizing: border-box; }
     .snapshot-layer { position:absolute;inset:0;display:block;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;object-fit:fill;pointer-events:none;user-select:none; }
-    .surface { position:absolute;inset:0;display:block;width:100%;height:100%;overflow:hidden;pointer-events:auto;touch-action:none;cursor:none;user-select:none;-webkit-user-select:none; }
-    .surface[data-state="GENERATING"],.surface[data-state="PAUSED"],.surface[data-state="SUCCESS"] { cursor:default; }
+    .surface { position:absolute;inset:0;display:block;width:100%;height:100%;overflow:hidden;pointer-events:auto;touch-action:none;cursor:default;user-select:none;-webkit-user-select:none; }
+    .surface[data-state="DRAWING"] { cursor:none; }
+    .surface[data-generation-failed="true"] { cursor:default; }
     .visual-layer { pointer-events:none; }
+    .obstacle-warning,.obstacle-map,.obstacle-flash { fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke; }
     .hint-route,.hint-outline,.path,.path-outline { fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke; }
     .hint-route { stroke:#ad654a;stroke-width:1.4;stroke-dasharray:4 7;opacity:.78; }
     .hint-outline { stroke:rgba(255,253,247,.8);stroke-width:4; }
@@ -42,10 +44,16 @@
     .brush-cursor { position:absolute;left:0;top:0;width:24px;height:36px;z-index:1;overflow:visible;pointer-events:none;display:none;filter:drop-shadow(.5px 1px .6px rgba(29,29,22,.15)); }
     .cursor-ink { position:absolute;left:0;top:0;z-index:1;display:none;pointer-events:none;color:#655f52;background:rgba(250,247,238,.88);border-radius:3px;padding:0 2px;font:10px/14px ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;white-space:nowrap; }
     .cursor-ink[data-low="true"] { color:#a35d44; }
+    .cursor-ink[data-unlimited="true"] { font-size:13px; }
     .brush-cursor[data-visible="true"],.cursor-ink[data-visible="true"] { display:block; }
-    .toolbar { position:absolute;top:12px;left:50%;transform:translateX(-50%);width:min(304px,calc(100% - 20px));height:48px;z-index:2;padding:8px 7px;overflow:hidden;pointer-events:auto;border:1px solid rgba(63,59,46,.17);border-radius:17px;background:rgba(249,246,236,.97);color:#4d4b40;box-shadow:0 3px 14px rgba(43,39,25,.09),inset 0 1px 0 rgba(255,255,250,.9);font:11px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;user-select:none;touch-action:none;cursor:grab; }
+    .toolbar { position:absolute;top:12px;left:50%;transform:translateX(-50%);width:min(372px,calc(100% - 20px));height:48px;z-index:2;padding:8px 7px;overflow:hidden;pointer-events:auto;border:1px solid rgba(63,59,46,.17);border-radius:17px;background:rgba(249,246,236,.97);color:#4d4b40;box-shadow:0 3px 14px rgba(43,39,25,.09),inset 0 1px 0 rgba(255,255,250,.9);font:11px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;user-select:none;touch-action:none;cursor:grab; }
     .toolbar[data-dragging="true"],.toolbar[data-dragging="true"] .drag-handle { cursor:grabbing; }
     .toolbar-main { display:flex;align-items:center;gap:4px;height:30px; }
+    /* Keep the saved drag position and node reservation fixed while the visual
+       controls fold away. The entire old footprint lets the brush pass through. */
+    .toolbar[data-state="DRAWING"] { background:transparent;border-color:transparent;box-shadow:none;pointer-events:none;cursor:none; }
+    .toolbar[data-state="DRAWING"] .toolbar-main { visibility:hidden; }
+    .toolbar[data-state="DRAWING"]::after { content:"";position:absolute;left:calc(50% - 14px);top:calc(50% - 3px);width:28px;height:6px;border-radius:3px;background:rgba(155,144,119,.55);pointer-events:none; }
     .status { width:20px;height:28px;flex:none;display:grid;place-items:center;color:#777264;outline-offset:0; }
     .status-icon { width:16px;height:16px; }
     .toolbar[data-state="SUCCESS"] .status { color:#91754d; }
@@ -55,21 +63,33 @@
     .metric-symbol { display:block;width:8px;height:11px;flex:none; }
     .metric-value { font-size:10px;font-variant-numeric:tabular-nums;letter-spacing:-.3px; }
     .node-count { width:34px; }
+    .maze-goal-icon { width:35px;height:17px; }
     .actions { display:flex;align-items:center;gap:1px;flex:none; }
-    button,.mode-control { appearance:none;position:relative;display:grid;place-items:center;flex:none;margin:0;padding:0;width:28px;height:30px;border:0;border-radius:8px;background:transparent;color:#565345;cursor:pointer;touch-action:manipulation; }
+    button { appearance:none;position:relative;display:grid;place-items:center;flex:none;margin:0;padding:0;width:28px;height:30px;border:0;border-radius:8px;background:transparent;color:#565345;cursor:pointer;touch-action:manipulation; }
     .control-icon { display:block;width:16px;height:16px;pointer-events:none; }
     button.drag-handle { width:18px;color:#aaa28f;cursor:grab; }
     .drag-handle .control-icon { width:12px;height:16px; }
-    button:hover,.mode-control:hover { background:#eee8da;color:#302f28; }
+    button:hover { background:#eee8da;color:#302f28; }
     button:active { background:#e7dfce; }
-    button:focus-visible,.mode-control:focus-within { outline:1.5px solid #a47556;outline-offset:-2px; }
+    button:focus-visible { outline:1.5px solid #a47556;outline-offset:-2px; }
     button:disabled { opacity:.3;cursor:default;background:transparent; }
-    .mode-control { color:#9a654b; }
-    .mode-select { position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer; }
-    .mode-control[data-disabled="true"] { opacity:.35;cursor:default; }
-    .mode-select:disabled { cursor:default; }
-    .mode-mark { display:none; }
-    .mode-control[data-mode="normal"] .mode-normal,.mode-control[data-mode="hell"] .mode-hell,.mode-control[data-mode="immortal"] .mode-immortal { display:block; }
+    .mode-control { display:flex;align-items:center;gap:1px;flex:none;height:30px;padding:2px;border-radius:9px;background:#eee8dc; }
+    button.mode-button { width:26px;height:26px;border-radius:7px;color:#999080; }
+    .maze-mode-slot { display:block;flex:none;height:26px;border-radius:7px; }
+    .maze-mode-slot[data-unavailable="true"] { cursor:not-allowed; }
+    .maze-mode-slot:focus-visible { outline:1.5px solid #a47556;outline-offset:1px; }
+    .maze-mode-slot[data-unavailable="true"] .mode-button { pointer-events:none;opacity:1;color:#665b4b; }
+    .maze-locked-mark { display:none; }
+    .maze-mode-slot[data-unavailable="true"] .maze-locked-mark { display:inline; }
+    .maze-mode-slot[data-unavailable="true"] .maze-unlocked-mark { display:none; }
+    .maze-tooltip { position:absolute;z-index:3;width:190px;max-width:calc(100% - 12px);padding:8px 10px;border:1px solid rgba(63,59,46,.17);border-radius:9px;background:#fffcf3;box-shadow:0 3px 12px rgba(43,39,25,.12);color:#565345;font:11px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;pointer-events:none; }
+    .maze-tooltip-guide { margin:0 0 7px;color:#766d5e; }
+    .maze-criterion { display:flex;align-items:center;justify-content:space-between;gap:12px; }
+    .maze-criterion + .maze-criterion { margin-top:4px; }
+    .criterion-mark { width:14px;height:14px;flex:none;color:#b3453f; }
+    .maze-criterion[data-passed="true"] .criterion-mark { color:#39733f; }
+    .mode-button[aria-pressed="true"] { color:#965d40;background:#fffcf3;box-shadow:0 1px 3px rgba(65,47,26,.13),inset 0 0 0 1px rgba(154,101,75,.17); }
+    .mode-button[aria-pressed="true"] .control-icon { stroke-width:1.8; }
     .hint[aria-pressed="true"] { background:#eee0ce;color:#995e40; }
     .hint[aria-pressed="true"] .hint-slash { display:block; }
     .hint-slash { display:none; }
@@ -78,8 +98,10 @@
     .exit { color:#8c8272; }
     .exit:hover { color:#ac5f46;background:#f0e2d7; }
     .sr-only,.message,.state-label { position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;clip-path:inset(50%)!important;white-space:nowrap!important;border:0!important; }
+    .generation-error { position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(400px,calc(100% - 32px));padding:14px 16px;border:1px solid rgba(151,84,57,.25);border-radius:12px;background:rgba(255,250,240,.97);color:#87573f;box-shadow:0 3px 16px rgba(43,39,25,.1);font:12px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;overflow-wrap:anywhere;pointer-events:none; }
     [hidden] { display:none!important; }
-    @media(max-width:340px) { .toolbar[data-debug="true"] button,.toolbar[data-debug="true"] .mode-control,.toolbar[data-debug="true"] .new-slot { width:26px; } }
+    @media(max-width:400px) { .toolbar-main { gap:3px; } button,.new-slot,button.mode-button { width:24px; } button.drag-handle { width:14px; } .status { width:16px; } .metrics { min-width:41px; } .node-count { width:30px;font-size:9.5px; } }
+    @media(max-width:360px) { .toolbar-main { gap:2px; } button,.new-slot,button.mode-button { width:22px; } button.drag-handle { width:12px; } .drag-handle .control-icon { width:10px; } .status,.status-icon { width:14px; } }
     @media(prefers-reduced-motion:reduce) { * { animation:none!important; } }
   `;
 
@@ -96,6 +118,60 @@
     height: rect.height ?? ((rect.bottom ?? 0) - (rect.top ?? rect.y ?? 0)),
   });
   const iconMarkup = content => `<svg class="control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${content}</svg>`;
+  const mazeCriteria = availability => {
+    const requirements = { ...P.Config.MAZE_REQUIREMENTS, ...availability.requirements };
+    const densityKnown = Number.isFinite(availability.obstacleRatio) && availability.obstacleRatio >= 0 && availability.obstacleRatio <= 1;
+    const distributionKnown = Number.isInteger(availability.occupiedRegions) && availability.occupiedRegions >= 0 && availability.occupiedRegions <= 48;
+    return [
+      { id: 'complexity', label: '复杂度', known: densityKnown,
+        passed: densityKnown && availability.obstacleRatio >= requirements.minObstacleRatio },
+      { id: 'distribution', label: '分散度', known: distributionKnown,
+        passed: distributionKnown && availability.occupiedRegions >= requirements.minOccupiedRegions },
+    ];
+  };
+
+  // Split only the final reachable collision edges. A merged straight edge can
+  // touch old page content for part of its length and added wall clearance for
+  // the rest, so classify unit edges before merging equal runs again.
+  const splitMazeContours = (contour, map, source) => {
+    const bucketSize = contour.bucketSize || 64;
+    const make = () => ({ segments: [], bucketSize, buckets: Object.create(null), componentId: contour.componentId });
+    const original = make(), added = make();
+    if (source?.width !== map.width || source?.height !== map.height || source.walkableMask?.length !== map.width * map.height) {
+      return { original: { ...original, segments: new Float32Array() }, added: contour };
+    }
+    const newlyBlocked = (x, y) => x >= 0 && y >= 0 && x < map.width && y < map.height &&
+      Boolean(source.walkableMask[y * map.width + x] && !map.walkableMask[y * map.width + x]);
+    const append = (target, x1, y1, x2, y2) => {
+      const id = target.segments.length / 4;
+      target.segments.push(x1, y1, x2, y2);
+      for (let by = Math.floor(y1 / bucketSize); by <= Math.floor(y2 / bucketSize); by++) {
+        for (let bx = Math.floor(x1 / bucketSize); bx <= Math.floor(x2 / bucketSize); bx++) {
+          (target.buckets[`${bx},${by}`] ||= []).push(id);
+        }
+      }
+    };
+    const edges = contour.segments;
+    for (let i = 0; i < edges.length; i += 4) {
+      const horizontal = edges[i + 1] === edges[i + 3];
+      const fixed = horizontal ? edges[i + 1] : edges[i];
+      const low = Math.min(edges[i + (horizontal ? 0 : 1)], edges[i + (horizontal ? 2 : 3)]);
+      const high = Math.max(edges[i + (horizontal ? 0 : 1)], edges[i + (horizontal ? 2 : 3)]);
+      const isAdded = at => horizontal ? newlyBlocked(at, fixed - 1) || newlyBlocked(at, fixed)
+        : newlyBlocked(fixed - 1, at) || newlyBlocked(fixed, at);
+      let run = low, addedRun = isAdded(low);
+      const flush = end => append(addedRun ? added : original,
+        horizontal ? run : fixed, horizontal ? fixed : run, horizontal ? end : fixed, horizontal ? fixed : end);
+      for (let at = low + 1; at < high; at++) {
+        const next = isAdded(at);
+        if (next !== addedRun) { flush(at); run = at; addedRun = next; }
+      }
+      if (low < high) flush(high);
+    }
+    original.segments = new Float32Array(original.segments);
+    added.segments = new Float32Array(added.segments);
+    return { original, added };
+  };
   const icons = {
     hint: '<path d="M2 12C7 4 17 4 22 12C17 20 7 20 2 12Z"/><circle cx="12" cy="12" r="2.7"/><path class="hint-slash" d="M4 4L20 20"/>',
     retry: '<path d="M5 9a7.4 7.4 0 1 1-.4 7M5 4v5h5"/>',
@@ -133,6 +209,10 @@
   P.Overlay = class Overlay {
     constructor({ onRetry, onNewPuzzle, onExit, onRegenerate, onDebug, onModeChange, onHint, onToolbarMove } = {}) {
       this.mode = P.Config?.DEFAULT_MODE || 'normal';
+      this.mazeAvailability = { available: false, reason: '正在检查页面是否适合生成迷宫' };
+      this.unlimitedInk = false;
+      this.generationFailed = false;
+      this.inkPercentage = 100;
       this.host = document.createElement('div');
       this.host.id = '__pagepath_overlay__';
       this.host.setAttribute('data-pagepath-root', '');
@@ -149,6 +229,23 @@
       this.surface = element('svg', { class: 'surface', xmlns: SVG_NS, 'aria-label': 'PagePath 一笔画地图', role: 'img' });
       this.svg = this.surface;
       this.debugLayer = element('g', { class: 'visual-layer', 'aria-hidden': 'true' });
+      this.mazeWallLayer = element('g', { class: 'visual-layer maze-walls', 'aria-hidden': 'true' });
+      this.mazeFloorLayer = element('g', { class: 'visual-layer maze-openings', 'aria-hidden': 'true' });
+      const warningDefs = element('defs');
+      this.warningGradient = element('radialGradient', { id: 'pagepath-warning', gradientUnits: 'userSpaceOnUse' });
+      this.warningGradient.append(element('stop', { offset: '0%', 'stop-color': '#dc3029', 'stop-opacity': 1 }),
+        element('stop', { offset: '65%', 'stop-color': '#dc3029', 'stop-opacity': .95 }),
+        element('stop', { offset: '100%', 'stop-color': '#dc3029', 'stop-opacity': 0 }));
+      this.obstacleShape = element('path', { id: 'pagepath-obstacles' });
+      warningDefs.append(this.warningGradient, this.obstacleShape);
+      this.allObstacles = element('use', { class: 'obstacle-map visual-layer', href: '#pagepath-obstacles',
+        stroke: '#d72f29', 'stroke-width': 1.5, opacity: .8, visibility: 'hidden', 'aria-hidden': 'true' });
+      this.obstacleFlash = element('use', { class: 'obstacle-flash visual-layer', href: '#pagepath-obstacles',
+        stroke: '#e33128', 'stroke-width': 2, opacity: 0, 'aria-hidden': 'true' });
+      this.flashAnimation = null;
+      this.routeHintVisible = false;
+      this.obstacleWarning = element('path', { class: 'obstacle-warning visual-layer',
+        fill: 'none', stroke: 'url(#pagepath-warning)', 'stroke-width': 1.8, 'aria-hidden': 'true' });
       this.hintLayer = element('g', { class: 'visual-layer hint-layer', 'aria-hidden': 'true' });
       this.pathLayer = element('g', { class: 'visual-layer', 'aria-hidden': 'true' });
       this.pathOutline = element('polyline', { class: 'path-outline' });
@@ -156,7 +253,8 @@
       this.inkStroke = element('g', { class: 'ink-stroke' });
       this.pathLayer.append(this.pathOutline, this.path, this.inkStroke);
       this.nodeLayer = element('g', { class: 'visual-layer', 'aria-hidden': 'true' });
-      this.surface.append(this.debugLayer, this.hintLayer, this.pathLayer, this.nodeLayer);
+      this.surface.append(warningDefs, this.mazeFloorLayer, this.mazeWallLayer, this.debugLayer, this.allObstacles, this.obstacleFlash,
+        this.obstacleWarning, this.hintLayer, this.pathLayer, this.nodeLayer);
       this.shadowRoot.append(this.surface);
       this.brushCursor = element('svg', {
         class: 'brush-cursor', viewBox: '0 0 24 36', width: 24, height: 36,
@@ -197,14 +295,19 @@
               <svg class="metric-symbol" viewBox="0 0 10 12" aria-hidden="true"><path d="M2 4C1 1 7 1 8 4C11 7 6 11 3 9C0 8 0 5 2 4Z" fill="currentColor"/></svg>
               <span class="metric-value node-count">0 / 0</span>
             </span>
+            <span class="metric metric-maze" title="穿过迷宫，到达纸张" aria-label="穿过迷宫，到达纸张" hidden>
+              <svg class="maze-goal-icon" viewBox="0 0 35 17" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12V6Q2 3 6 3Q10 3 10 6V12Z"/><ellipse cx="6" cy="7" rx="2.2" ry="2.7"/><path d="M13 8H21M18 5L21 8L18 11M25 2H30L33 5V15H25ZM30 2V5H33"/></svg>
+            </span>
           </div>
           <div class="actions">
-            <span class="mode-control" data-mode="normal">
-              ${iconMarkup('<path class="mode-mark mode-normal" d="M4 18L12 5L20 18Z"/><path class="mode-mark mode-hell" d="M2 18L8 7L14 18M10 18L16 7L22 18"/><path class="mode-mark mode-immortal" d="M1 18L6 9L11 18M7 18L12 4L17 18M13 18L18 9L23 18"/>')}
-              <select class="mode-select" aria-label="游戏难度" data-mode="normal">
-                <option value="normal">普通</option><option value="hell">地狱</option><option value="immortal">神仙</option>
-              </select>
-            </span>
+            <div class="mode-control" role="group" aria-label="游戏难度" data-mode="normal">
+              <button class="mode-button" type="button" data-mode="normal" aria-pressed="true" aria-label="萌新">${iconMarkup('<path d="M4 18L12 5L20 18Z"/>')}</button>
+              <button class="mode-button" type="button" data-mode="hell" aria-pressed="false" aria-label="糕手">${iconMarkup('<path d="M2 18L8 7L14 18M10 18L16 7L22 18"/>')}</button>
+              <button class="mode-button" type="button" data-mode="immortal" aria-pressed="false" aria-label="神仙">${iconMarkup('<path d="M1 18L6 9L11 18M7 18L12 4L17 18M13 18L18 9L23 18"/>')}</button>
+              <span class="maze-mode-slot" data-unavailable="true" role="group" aria-label="第二关" title="">
+                <button class="mode-button" type="button" data-mode="maze" aria-pressed="false" aria-label="第二关" aria-describedby="pagepath-maze-reason" disabled>${iconMarkup('<g class="maze-locked-mark" stroke-width="1.7"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></g><g class="maze-unlocked-mark"><path d="M12 2.5L14.9 8.5L21.5 9.4L16.8 14L17.9 20.6L12 17.5L6.1 20.6L7.2 14L2.5 9.4L9.1 8.5Z"/></g>')}</button>
+              </span>
+            </div>
             <button class="hint" type="button" aria-label="提示" aria-pressed="false" title="显示参考路线">${iconMarkup(icons.hint)}<span class="control-label sr-only">提示</span></button>
             <button class="retry" type="button" aria-label="重试" title="重试当前关卡">${iconMarkup(icons.retry)}<span class="sr-only">重试</span></button>
             <span class="new-slot">
@@ -214,12 +317,28 @@
             <button class="exit" type="button" aria-label="退出游戏" title="退出游戏 · 右键 / Esc">${iconMarkup(icons.exit)}<span class="sr-only">退出</span></button>
           </div>
         </div>
+        <span id="pagepath-maze-reason" class="sr-only"></span>
         <span class="message" role="status" aria-live="polite" aria-atomic="true"></span>`;
       this.shadowRoot.append(this.toolbar);
+      this.mazeTooltip = document.createElement('div');
+      this.mazeTooltip.className = 'maze-tooltip';
+      this.mazeTooltip.setAttribute('role', 'tooltip');
+      this.mazeTooltip.hidden = true;
+      this.mazeTooltip.innerHTML = '<p class="maze-tooltip-guide">寻找复杂的页面来解锁第二关。</p>' + ['complexity', 'distribution'].map(id =>
+        `<div class="maze-criterion" data-criterion="${id}"><span></span><svg class="criterion-mark" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path/></svg></div>`).join('');
+      this.shadowRoot.append(this.mazeTooltip);
+      this.generationError = document.createElement('div');
+      this.generationError.className = 'generation-error';
+      this.generationError.setAttribute('aria-hidden', 'true');
+      this.generationError.hidden = true;
+      this.shadowRoot.append(this.generationError);
+      this.toolbarMain = this.toolbar.querySelector('.toolbar-main');
       this.retryButton = this.toolbar.querySelector('.retry');
       this.hintButton = this.toolbar.querySelector('.hint');
-      this.modeSelect = this.toolbar.querySelector('.mode-select');
+      this.modeButtons = [...this.toolbar.querySelectorAll('.mode-button')];
       this.modeControl = this.toolbar.querySelector('.mode-control');
+      this.mazeModeSlot = this.toolbar.querySelector('.maze-mode-slot');
+      this.mazeReason = this.toolbar.querySelector('#pagepath-maze-reason');
       this.newPuzzleButton = this.toolbar.querySelector('.new-puzzle');
       this.regenerateButton = this.toolbar.querySelector('.regenerate');
       this.exitButton = this.toolbar.querySelector('.exit');
@@ -233,13 +352,27 @@
       this.toolbarPosition = null;
       this.toolbarDrag = null;
       this.nodeMetric = this.toolbar.querySelector('.metric-nodes');
+      this.mazeMetric = this.toolbar.querySelector('.metric-maze');
       this.listeners = [];
-      this.bind(this.retryButton, 'click', onRetry);
+      this.bind(this.retryButton, 'click', () => {
+        if (this.retryButton.disabled) return;
+        if (this.generationFailed) (onRegenerate || onNewPuzzle)?.();
+        else onRetry?.();
+      });
       this.bind(this.hintButton, 'click', onHint);
       this.bind(this.newPuzzleButton, 'click', onNewPuzzle);
       this.bind(this.regenerateButton, 'click', onRegenerate || onNewPuzzle);
       this.bind(this.exitButton, 'click', onExit);
-      this.bind(this.modeSelect, 'change', () => onModeChange?.(this.modeSelect.value));
+      this.listen(this.mazeModeSlot, 'pointerenter', () => { this.mazeTooltipHovered = true; this.refreshMazeTooltip(); });
+      this.listen(this.mazeModeSlot, 'pointerleave', () => { this.mazeTooltipHovered = false; this.refreshMazeTooltip(); });
+      this.listen(this.mazeModeSlot, 'focusin', () => { this.mazeTooltipFocused = true; this.refreshMazeTooltip(); });
+      this.listen(this.mazeModeSlot, 'focusout', () => { this.mazeTooltipFocused = false; this.refreshMazeTooltip(); });
+      this.listen(window, 'blur', () => this.hideMazeTooltip());
+      for (const button of this.modeButtons) {
+        this.bind(button, 'click', () => {
+          if (!button.disabled && button.dataset.mode !== this.mode) onModeChange?.(button.dataset.mode);
+        });
+      }
       if (onDebug) {
         this.debugButton = document.createElement('button');
         this.debugButton.className = 'debug-button';
@@ -254,7 +387,7 @@
       for (const type of ['pointerenter', 'pointermove']) this.listen(this.surface, type, event => this.moveBrush(event));
       this.listen(this.surface, 'pointerleave', () => this.hideBrush());
       this.listen(this.surface, 'pointercancel', () => this.hideBrush());
-      this.listen(this.toolbar, 'pointerenter', () => this.hideBrush());
+      this.listen(this.toolbar, 'pointerenter', () => { if (this.state !== 'DRAWING') this.hideBrush(); });
       this.listen(window, 'blur', () => this.hideBrush());
       this.listen(this.toolbar, 'pointerdown', event => this.startToolbarDrag(event));
       this.listen(this.toolbar, 'pointermove', event => this.moveToolbarDrag(event));
@@ -282,6 +415,32 @@
       this.listeners.push(() => target.removeEventListener(type, callback));
     }
 
+    hideMazeTooltip() {
+      this.mazeTooltipHovered = false;
+      this.mazeTooltipFocused = false;
+      this.mazeTooltip.hidden = true;
+    }
+
+    refreshMazeTooltip() {
+      const canShow = !this.mazeAvailability.available && !this.captureHidden &&
+        !['GENERATING', 'DRAWING', 'DESTROYED'].includes(this.state);
+      this.mazeModeSlot.tabIndex = canShow ? 0 : -1;
+      if (!canShow) { this.hideMazeTooltip(); return; }
+      this.mazeTooltip.hidden = !this.mazeTooltipHovered && !this.mazeTooltipFocused;
+      this.positionMazeTooltip();
+    }
+
+    positionMazeTooltip() {
+      if (this.mazeTooltip.hidden) return;
+      const anchor = this.mazeModeSlot.getBoundingClientRect(), box = this.mazeTooltip.getBoundingClientRect();
+      const margin = 6;
+      const left = Math.max(margin, Math.min(window.innerWidth - box.width - margin, anchor.left + (anchor.width - box.width) / 2));
+      const below = anchor.bottom + margin;
+      const top = below + box.height <= window.innerHeight - margin ? below : anchor.top - box.height - margin;
+      this.mazeTooltip.style.left = `${left}px`;
+      this.mazeTooltip.style.top = `${Math.max(margin, Math.min(window.innerHeight - box.height - margin, top))}px`;
+    }
+
     positionToolbar(x, y) {
       const bounds = this.toolbar.getBoundingClientRect();
       const margin = 6;
@@ -291,16 +450,18 @@
       this.toolbar.style.left = `${left}px`;
       this.toolbar.style.top = `${top}px`;
       this.toolbar.style.transform = 'none';
+      this.positionMazeTooltip();
     }
 
     clampToolbar() {
       if (this.toolbarPosition) this.positionToolbar(this.toolbarPosition.x, this.toolbarPosition.y);
+      else this.positionMazeTooltip();
     }
 
     startToolbarDrag(event) {
       if (event.button !== 0 || event.isPrimary === false || this.toolbarDrag ||
           ['DRAWING', 'GENERATING', 'DESTROYED'].includes(this.state)) return;
-      const control = event.target.closest?.('button,select,input,textarea');
+      const control = event.target.closest?.('button,select,input,textarea,.maze-mode-slot');
       if (control && control !== this.dragHandle) return;
       const rect = this.toolbar.getBoundingClientRect();
       this.toolbarDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
@@ -348,19 +509,114 @@
       this.brushCursor.setAttribute('data-visible', 'false');
       this.cursorInk.setAttribute('data-visible', 'false');
       this.lastBrushPoint = null;
+      cancelAnimationFrame(this.warningFrame);
+      this.warningFrame = 0;
+      this.obstacleWarning.setAttribute('d', '');
+    }
+
+    setMap(map) {
+      this.cancelObstacleFlash();
+      this.pixelMap = map?.kind === 'pixel-mask' ? map : null;
+      this.visibleContours = this.pixelMap
+        ? P.Collision.reachableContours(this.pixelMap, this.level?.nodes?.[0]) : null;
+      if (this.visibleContours && this.level?.mode === 'maze') {
+        const parts = splitMazeContours(this.visibleContours, this.pixelMap, this.level.mazeSourceAnalysis);
+        this.sourceContours = parts.original;
+        this.mazeContours = parts.added;
+      } else {
+        this.sourceContours = this.visibleContours;
+        this.mazeContours = null;
+      }
+      this.obstacleWarning.setAttribute('d', '');
+      // The one-shot new-map flash uses original page content only. Added maze
+      // walls stay hidden until approached, and hints never reveal obstacles.
+      const segments = this.sourceContours?.segments || [], lines = [];
+      for (let i = 0; i < segments.length; i += 4) {
+        lines.push(`M${segments[i]},${segments[i + 1]}L${segments[i + 2]},${segments[i + 3]}`);
+      }
+      this.obstacleShape.setAttribute('d', lines.join(''));
+      this.allObstacles.setAttribute('visibility', 'hidden');
+    }
+
+    cancelObstacleFlash() {
+      if (!this.flashAnimation) return;
+      this.flashAnimation.onfinish = null;
+      this.flashAnimation.cancel();
+      this.flashAnimation = null;
+    }
+
+    flashObstacles() {
+      this.cancelObstacleFlash();
+      if (!this.sourceContours?.segments?.length || this.captureHidden ||
+          ['PAUSED', 'DESTROYED', 'GENERATING'].includes(this.state)) return;
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const frames = reduced ? [{ opacity: .75 }, { opacity: .75 }]
+        : [{ opacity: 0 }, { opacity: 1, offset: .18 }, { opacity: .9, offset: .38 }, { opacity: 0 }];
+      const animation = this.obstacleFlash.animate(frames, { duration: 700, easing: 'ease-out' });
+      this.flashAnimation = animation;
+      animation.onfinish = () => {
+        if (this.flashAnimation === animation) this.cancelObstacleFlash();
+      };
+    }
+
+    renderProximity(point) {
+      const map = this.pixelMap, contour = this.visibleContours;
+      if (!point || !contour || !map?.walkableMask) {
+        this.obstacleWarning.setAttribute('d', ''); return;
+      }
+      const { x, y } = point;
+      const col = Math.floor(x), row = Math.floor(y), radius = P.Config.PIXEL_MAP.WARNING_DISTANCE;
+      if (col < 0 || row < 0 || col >= map.width || row >= map.height) {
+        this.obstacleWarning.setAttribute('d', ''); return;
+      }
+      const distance = Math.max(0, map.distanceMap[row * map.width + col] -
+        (map.stats?.clearance ?? P.Config.PLAYER_RADIUS + P.Config.PIXEL_MAP.SAFETY_MARGIN));
+      if (distance >= radius) { this.obstacleWarning.setAttribute('d', ''); return; }
+      const ids = new Set(), size = contour.bucketSize;
+      for (let by = Math.floor((y - radius) / size); by <= Math.floor((y + radius) / size); by++) {
+        for (let bx = Math.floor((x - radius) / size); bx <= Math.floor((x + radius) / size); bx++) {
+          for (const id of contour.buckets[`${bx},${by}`] || []) ids.add(id);
+        }
+      }
+      const lines = [], segments = contour.segments;
+      for (const id of ids) {
+        let x1 = segments[id * 4], y1 = segments[id * 4 + 1];
+        let x2 = segments[id * 4 + 2], y2 = segments[id * 4 + 3];
+        // Clip only the visible portion of an exact mask-cell edge. Never
+        // approximate the collision contour or highlight a far-away whole wall.
+        if (y1 === y2) {
+          if (Math.abs(y1 - y) >= radius) continue;
+          const reach = Math.sqrt(radius * radius - (y1 - y) ** 2);
+          const low = Math.max(Math.min(x1, x2), x - reach), high = Math.min(Math.max(x1, x2), x + reach);
+          if (low >= high) continue;
+          x1 = low; x2 = high;
+        } else {
+          if (Math.abs(x1 - x) >= radius) continue;
+          const reach = Math.sqrt(radius * radius - (x1 - x) ** 2);
+          const low = Math.max(Math.min(y1, y2), y - reach), high = Math.min(Math.max(y1, y2), y + reach);
+          if (low >= high) continue;
+          y1 = low; y2 = high;
+        }
+        lines.push(`M${x1},${y1}L${x2},${y2}`);
+      }
+      this.warningGradient.setAttribute('cx', x);
+      this.warningGradient.setAttribute('cy', y);
+      this.warningGradient.setAttribute('r', radius);
+      this.obstacleWarning.setAttribute('d', lines.join(''));
+      this.obstacleWarning.setAttribute('opacity', .4 + .6 * (1 - distance / radius));
     }
 
     moveBrush(event) {
-      if (this.captureHidden || !['READY', 'DRAWING', 'FAILED'].includes(this.state) || event.pointerType === 'touch') {
+      if (this.captureHidden || this.generationFailed || this.state !== 'DRAWING' || event.pointerType === 'touch') {
         this.hideBrush();
         return;
       }
       const x = event.clientX, y = event.clientY;
       const toolbar = this.toolbar.getBoundingClientRect();
-      // Pointer capture can keep sending surface events while the mouse is
-      // above the toolbar. Check coordinates as well as pointerleave.
+      // The expanded toolbar hides the brush even during captured events.
+      // Folded controls let drawing continue across their former footprint.
       if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight ||
-          (x >= toolbar.left && x <= toolbar.right && y >= toolbar.top && y <= toolbar.bottom)) {
+          (this.state !== 'DRAWING' && x >= toolbar.left && x <= toolbar.right && y >= toolbar.top && y <= toolbar.bottom)) {
         this.hideBrush();
         return;
       }
@@ -371,11 +627,17 @@
       const inkX = x + 10 + 32 < window.innerWidth ? x + 10 : x - 40;
       this.cursorInk.style.transform = `translate(${Math.max(2, inkX)}px, ${Math.max(2, Math.min(window.innerHeight - 16, y - 13))}px)`;
       this.cursorInk.setAttribute('data-visible', 'true');
+      if (!this.warningFrame) this.warningFrame = requestAnimationFrame(() => {
+        this.warningFrame = 0;
+        this.renderProximity(this.lastBrushPoint);
+      });
     }
 
     setCaptureHidden(hidden) {
       this.captureHidden = Boolean(hidden);
       this.hideBrush();
+      if (hidden) this.cancelObstacleFlash();
+      if (hidden) this.hideMazeTooltip();
       if (hidden) this.host.style.setProperty('opacity', '0', 'important');
       else this.host.style.removeProperty('opacity');
     }
@@ -428,9 +690,18 @@
 
     renderLevel(level) {
       this.level = level;
+      this.mazeWallLayer.replaceChildren();
+      this.mazeFloorLayer.replaceChildren();
+      if (level?.mazeOpenings?.length) {
+        // Only erase pixels actually opened through original foreground.
+        // Natural page background is never covered with a maze-shaped floor.
+        const d = level.mazeOpenings.map(r => `M${r.x},${r.y}h${r.width}v${r.height}h-${r.width}Z`).join('');
+        this.mazeFloorLayer.append(element('path', { d, fill: '#fffaf0', 'fill-opacity': 0.98 }));
+      }
+      if (!level) this.setMap(null);
       this.renderHint(false);
       this.update({ hintVisible: false });
-      if (level?.mode) this.update({ mode: level.mode });
+      if (level?.mode) this.update({ mode: level.mode, unlimitedInk: Boolean(level.unlimitedInk || level.mode === 'maze') });
       this.resize();
       this.nodeLayer.replaceChildren();
       this.nodeElements.clear();
@@ -531,7 +802,11 @@
     renderHint(visible) {
       this.hintLayer.replaceChildren();
       const route = this.level?.referencePath;
-      if (!visible || !route?.length) return;
+      this.routeHintVisible = Boolean(visible && route?.length && this.mode !== 'maze' && this.level?.mode !== 'maze');
+      this.allObstacles.setAttribute('visibility', 'hidden');
+      if (this.routeHintVisible) this.cancelObstacleFlash();
+      this.renderProximity(this.lastBrushPoint);
+      if (!this.routeHintVisible) return;
       const points = pointString(route);
       this.hintLayer.append(
         element('polyline', { class: 'hint-outline', points }),
@@ -563,38 +838,70 @@
       }
     }
 
-    update({ state, nodes, total, ink, inkMultiplier, message, score, difficulty, efficiency, mode, hintVisible } = {}) {
+    update({ state, nodes, total, ink, inkMultiplier, message, score, difficulty, efficiency, mode, hintVisible,
+      mazeAvailability, unlimitedInk, generationFailed } = {}) {
+      if (generationFailed !== undefined) this.generationFailed = Boolean(generationFailed);
+      if (mazeAvailability !== undefined) {
+        // Replace the measured snapshot instead of merging it: a new capture
+        // may be pending, and must not display numbers from the previous page.
+        this.mazeAvailability = { ...mazeAvailability, available: Boolean(mazeAvailability?.available),
+          reason: typeof mazeAvailability?.reason === 'string' && mazeAvailability.reason.trim()
+            ? mazeAvailability.reason.trim() : '此页面暂不适合生成迷宫' };
+      }
+      if (mazeAvailability !== undefined || !this.mazeReason.textContent) {
+        const criteria = mazeCriteria(this.mazeAvailability);
+        for (const criterion of criteria) {
+          const row = this.mazeTooltip.querySelector(`[data-criterion="${criterion.id}"]`);
+          row.dataset.passed = String(criterion.passed);
+          row.querySelector('span').textContent = criterion.label;
+          row.setAttribute('aria-label', `${criterion.label}：${criterion.known ? criterion.passed ? '已达标' : '未达标' : '待检测'}`);
+          row.querySelector('path').setAttribute('d', criterion.passed ? 'M3 8L6.5 11.5L13 4.5' : 'M4 4L12 12M12 4L4 12');
+        }
+        this.mazeReason.textContent = criteria.map(criterion => `${criterion.label}：${criterion.known ? criterion.passed ? '已达标' : '未达标' : '待检测'}`).join('；');
+      }
+      if (mode !== undefined || inkMultiplier !== undefined || mazeAvailability !== undefined) {
+        const profile = P.getMode(mode ?? this.mode);
+        this.mode = profile.id;
+        this.modeControl.dataset.mode = this.mode;
+        this.toolbar.dataset.mode = this.mode;
+        for (const button of this.modeButtons) {
+          const option = P.getMode(button.dataset.mode), selected = option.id === this.mode;
+          button.setAttribute('aria-pressed', String(selected));
+          button.setAttribute('aria-label', option.label);
+          button.title = option.id === 'maze' && !this.mazeAvailability.available ? '' : option.label;
+          if (option.id === 'maze') {
+            this.mazeModeSlot.title = button.title;
+            this.mazeModeSlot.dataset.unavailable = String(!this.mazeAvailability.available);
+            for (const control of [button, this.mazeModeSlot]) {
+              if (this.mazeAvailability.available) control.removeAttribute('aria-describedby');
+              else control.setAttribute('aria-describedby', 'pagepath-maze-reason');
+            }
+          }
+          if (selected) this.modeControl.title = button.title;
+        }
+        this.surface.setAttribute('aria-label', this.mode === 'maze' ? 'PagePath 第二关迷宫地图' : 'PagePath 一笔画地图');
+      }
+      const noHint = this.mode === 'maze' || this.level?.mode === 'maze';
+      if (noHint) {
+        this.renderHint(false);
+        hintVisible = false;
+      }
       if (hintVisible !== undefined) {
         this.hintButton.querySelector('.control-label').textContent = hintVisible ? '收起' : '提示';
         this.hintButton.setAttribute('aria-label', hintVisible ? '收起提示' : '提示');
         this.hintButton.setAttribute('aria-pressed', String(Boolean(hintVisible)));
-        this.hintButton.title = hintVisible ? '收起参考路线' : '显示参考路线 · 从砚台到纸张';
       }
-      if (mode !== undefined || inkMultiplier !== undefined) {
-        const profile = P.getMode(mode ?? this.mode);
-        this.mode = profile.id;
-        this.modeSelect.value = this.mode;
-        this.modeSelect.dataset.mode = this.mode;
-        this.modeControl.dataset.mode = this.mode;
-        this.toolbar.dataset.mode = this.mode;
-        const activeLevel = this.level?.mode === profile.id ? this.level : null;
-        const reserve = multiplier => Number(((multiplier - 1) * 100).toFixed(1));
-        const budget = inkMultiplier ?? activeLevel?.inkMultiplier;
-        const nodeLabel = activeLevel ? `本局 ${activeLevel.nodes.length}` : `目标 ${profile.targetNodes}–${profile.maxNodes}`;
-        const spare = budget !== undefined ? `${reserve(budget)}%`
-          : profile.inkPerNode ? `${reserve(P.getInkMultiplier(profile.id, profile.targetNodes))}–${reserve(P.getInkMultiplier(profile.id, profile.maxNodes))}%（随点数调整）`
-          : `${reserve(profile.inkMultiplier)}%`;
-        this.modeSelect.title = `${profile.label}：${nodeLabel} 节点 · 墨水余量 ${spare} · ${profile.trailLength}px 尾迹；切换难度会生成新地图`;
-        this.modeSelect.setAttribute('aria-label', `游戏难度：${profile.label}`);
-        this.modeControl.title = this.modeSelect.title;
-      }
+      this.hintButton.hidden = noHint;
+      this.hintButton.title = `${this.hintButton.getAttribute('aria-pressed') === 'true' ? '收起' : '显示'}参考路线`;
       if (state) {
         this.state = state;
+        if (['PAUSED', 'GENERATING', 'DESTROYED'].includes(state)) this.cancelObstacleFlash();
         this.toolbar.dataset.state = state;
+        this.toolbarMain.inert = state === 'DRAWING';
         this.surface.dataset.state = state;
         this.stateLabel.textContent = {
           IDLE: '待开始', GENERATING: '生成中', READY: '待开始', DRAWING: '描绘中',
-          FAILED: '再试一次', SUCCESS: '已完成', PAUSED: '已暂停', DESTROYED: '已退出',
+          FAILED: this.generationFailed ? '生成失败' : '再试一次', SUCCESS: '已完成', PAUSED: '已暂停', DESTROYED: '已退出',
         }[state] || state;
         this.statusPath.setAttribute('d', {
           IDLE: 'M8 5Q4 6 4 12Q4 19 12 19Q20 19 20 12Q20 4 12 4Q10 4 8 5ZM8 9Q12 6 16 9',
@@ -604,32 +911,51 @@
           SUCCESS: 'M5 12L10 17L20 6', FAILED: 'M7 7L17 17M17 7L7 17',
           PAUSED: 'M9 6V18M15 6V18', DESTROYED: 'M7 7L17 17M17 7L7 17',
         }[state] || '');
-        if (!['READY', 'DRAWING', 'FAILED'].includes(state)) this.hideBrush();
+        if (this.generationFailed || state !== 'DRAWING') this.hideBrush();
         const busy = state === 'GENERATING';
         const paused = state === 'PAUSED';
         this.dragHandle.disabled = busy || state === 'DRAWING' || state === 'DESTROYED';
         if (this.dragHandle.disabled) this.endToolbarDrag();
-        this.modeSelect.disabled = busy || state === 'DRAWING';
-        this.modeControl.dataset.disabled = String(this.modeSelect.disabled);
-        this.retryButton.disabled = busy || paused || !this.level;
+        this.retryButton.disabled = busy || paused || (!this.level && !this.generationFailed);
+        const retryLabel = this.generationFailed ? '刷新地图' : '重试';
+        this.retryButton.setAttribute('aria-label', retryLabel);
+        this.retryButton.title = this.generationFailed ? '重新截取页面并生成关卡' : '重试当前关卡';
+        if (this.retryButton.dataset.refresh !== String(this.generationFailed)) {
+          this.retryButton.innerHTML = `${iconMarkup(this.generationFailed ? icons.regenerate : icons.retry)}<span class="sr-only">${retryLabel}</span>`;
+          this.retryButton.dataset.refresh = String(this.generationFailed);
+        }
         this.newPuzzleButton.disabled = busy;
         this.newPuzzleButton.hidden = paused;
         this.regenerateButton.hidden = !paused;
       }
-      this.hintButton.disabled = !this.level?.referencePath?.length ||
+      for (const button of this.modeButtons) {
+        button.disabled = ['GENERATING', 'DRAWING', 'DESTROYED'].includes(this.state) ||
+          (button.dataset.mode === 'maze' && !this.mazeAvailability.available);
+      }
+      this.refreshMazeTooltip();
+      this.hintButton.disabled = noHint || !this.level?.referencePath?.length ||
         ['GENERATING', 'DRAWING', 'PAUSED', 'DESTROYED'].includes(this.state);
       if (nodes !== undefined) this.collected = nodes;
       if (total !== undefined) this.total = total;
       this.nodeCount.textContent = `${this.collected ?? 0} / ${this.total ?? 0}`;
       this.nodeMetric.title = `已收集墨点 ${this.collected ?? 0} / ${this.total ?? 0}`;
       this.nodeMetric.setAttribute('aria-label', this.nodeMetric.title);
-      if (ink !== undefined) {
-        const percentage = Math.max(0, Math.min(100, Math.round(ink)));
-        this.cursorInk.textContent = `${percentage}%`;
-        this.cursorInk.dataset.low = String(percentage <= 20);
-        this.cursorInk.setAttribute('aria-label', `剩余墨水 ${percentage}%`);
-      }
-      if (this.state === 'SUCCESS' && score !== undefined) {
+      const maze = this.mode === 'maze';
+      this.nodeMetric.hidden = maze;
+      this.mazeMetric.hidden = !maze;
+      this.mazeMetric.title = this.state === 'SUCCESS' ? '已走出迷宫' : '穿过迷宫，到达纸张';
+      this.mazeMetric.setAttribute('aria-label', this.mazeMetric.title);
+      if (unlimitedInk !== undefined) this.unlimitedInk = Boolean(unlimitedInk);
+      else if (mode !== undefined) this.unlimitedInk = maze;
+      if (Number.isFinite(ink)) this.inkPercentage = Math.max(0, Math.min(100, Math.round(ink)));
+      this.cursorInk.textContent = this.unlimitedInk ? '∞' : `${this.inkPercentage}%`;
+      this.cursorInk.dataset.low = String(!this.unlimitedInk && this.inkPercentage <= 20);
+      this.cursorInk.dataset.unlimited = String(this.unlimitedInk);
+      this.cursorInk.setAttribute('aria-label', this.unlimitedInk ? '无限墨水' : `剩余墨水 ${this.inkPercentage}%`);
+      if (this.state === 'SUCCESS' && maze) {
+        this.message.textContent = message ?? '第二关 · 已走出迷宫';
+        this.message.classList.add('result');
+      } else if (this.state === 'SUCCESS' && score !== undefined) {
         const parts = [P.getMode(this.mode).label, `得分 ${Math.round(score)}`];
         if (difficulty !== undefined) parts.push(`难度 ${Math.round(difficulty)}`);
         if (efficiency !== undefined) parts.push(`效率 ${Math.round(efficiency)}%`);
@@ -638,16 +964,24 @@
       } else if (message !== undefined || state) {
         const defaultMessages = {
           GENERATING: '正在寻找网页中的空白…',
-          READY: '从砚台按住鼠标，经过所有墨点，再到纸张。',
-          DRAWING: '保持按住 · 避开网页内容 · 收集所有墨点',
-          FAILED: '点击重试，或再次从砚台按住鼠标开始。',
+          READY: '单击砚台开始，移动毛笔经过所有墨点，再到纸张。',
+          DRAWING: '移动毛笔 · 避开网页内容 · 收集所有墨点',
+          FAILED: this.generationFailed
+            ? (this.mode === 'maze' ? '第二关生成失败，可重试新地图、刷新页面截图或切换难度。'
+              : '当前页面空隙不足，可点击五角星进入第二关。')
+            : '点击重试，或再次单击砚台开始。',
           SUCCESS: '路径完成。试试下一张地图。',
           PAUSED: '页面布局发生变化，请重新生成地图。',
+          ...(maze ? { GENERATING: '正在生成迷宫…', READY: '单击砚台开始，移动毛笔穿过迷宫，到达纸张。',
+            DRAWING: '移动毛笔 · 避开墙壁 · 找到通往纸张的路', SUCCESS: '已走出迷宫。试试下一张地图。' } : {}),
         };
         this.message.textContent = message ?? defaultMessages[this.state] ?? '';
         this.message.classList.remove('result');
       }
       this.message.title = this.message.textContent;
+      this.surface.dataset.generationFailed = String(this.generationFailed);
+      this.generationError.hidden = !this.generationFailed || this.state !== 'FAILED';
+      this.generationError.textContent = this.generationError.hidden ? '' : this.message.textContent;
       this.status.title = `${this.stateLabel.textContent} · ${this.message.textContent}`;
       this.status.setAttribute('aria-label', this.status.title);
     }
@@ -655,12 +989,20 @@
     showDebug(analysis, level, enabled) {
       this.debugLayer.replaceChildren();
       if (!enabled) return;
+      if (analysis?.kind === 'pixel-mask') {
+        const edges = (this.pixelMap === analysis ? this.sourceContours : analysis.contours)?.segments || [], lines = [];
+        for (let i = 0; i < Math.min(edges.length, 200000); i += 4) {
+          lines.push(`M${edges[i]},${edges[i + 1]}L${edges[i + 2]},${edges[i + 3]}`);
+        }
+        this.debugLayer.append(element('path', { d: lines.join(''), fill: 'none',
+          stroke: '#d83f39', 'stroke-width': .7, opacity: .55 }));
+      }
       const grid = level?.grid || analysis?.grid;
       // A single SVG path per component keeps the diagnostic grid inexpensive.
       if (grid?.components && typeof grid.point === 'function') {
         grid.components.forEach((component, index) => {
           const color = `hsl(${(index * 73 + 155) % 360} 65% 47%)`;
-          const half = grid.cellSize * .39;
+          const half = (grid.cellSize || 4) * .39;
           const cells = component.map(cell => {
             const point = grid.point(cell);
             return `M${point.x - half},${point.y - half}h${half * 2}v${half * 2}h${-half * 2}Z`;
@@ -686,13 +1028,18 @@
     }
 
     destroy() {
+      this.hideMazeTooltip();
       this.endToolbarDrag(null, false);
       this.hideBrush();
+      this.setMap(null);
       for (const remove of this.listeners.splice(0)) remove();
       this.clearSnapshot();
       this.host.remove();
       this.nodeElements.clear();
+      this.mazeWallLayer.replaceChildren();
+      this.mazeFloorLayer.replaceChildren();
       this.level = null;
+      this.pixelMap = null;
       this.state = 'DESTROYED';
     }
   };

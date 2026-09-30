@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Field Archive · 密集内容页面</title>
+  <style>
+    * { box-sizing:border-box; }
+    html,body { width:100%;height:100%;margin:0;overflow:hidden; }
+    body { background:#f6f3eb;color:#fff;font-family:system-ui,"Microsoft YaHei",sans-serif; }
+    main { position:absolute;inset:34px;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr));gap:40px; }
+    article { position:relative;overflow:hidden;padding:26px 30px;background-color:#284b4b;
+      background-image:repeating-linear-gradient(37deg,#294845 0px,#294845 3px,#6a8c7e 3px,#6a8c7e 6px); }
+    article:nth-child(2) { background-image:repeating-linear-gradient(113deg,#443748 0px,#443748 3px,#ad7f84 3px,#ad7f84 6px); }
+    article:nth-child(3) { background-image:repeating-linear-gradient(71deg,#173c54 0px,#173c54 3px,#829da3 3px,#829da3 6px); }
+    article:nth-child(4) { background-image:repeating-linear-gradient(129deg,#674333 0px,#674333 3px,#c29658 3px,#c29658 6px); }
+    article:nth-child(5) { background-image:repeating-linear-gradient(53deg,#413c65 0px,#413c65 3px,#8991b9 3px,#8991b9 6px); }
+    article:nth-child(6) { background-image:repeating-linear-gradient(101deg,#385542 0px,#385542 3px,#a3ad7c 3px,#a3ad7c 6px); }
+    .eyebrow { margin:0 0 18px;font-size:11px;font-weight:600;letter-spacing:.2em;text-shadow:0 1px 2px #000; }
+    h1,h2 { margin:0;font-size:34px;font-weight:500;line-height:1.25;text-shadow:0 2px 3px #0008; }
+    .caption { position:absolute;left:30px;bottom:24px;margin:0;font-size:13px;letter-spacing:.04em;text-shadow:0 1px 2px #000; }
+    .number { position:absolute;right:26px;bottom:17px;font-size:58px;font-weight:650;line-height:1;letter-spacing:-.06em;color:#fffc; }
+    #launch { position:absolute;right:20px;top:18px;z-index:1;border:1px solid #fff9;background:#183632;color:#fff;padding:7px 10px;font:11px system-ui;cursor:pointer; }
+    @media(min-width:1151px) {
+      article:nth-child(1) { grid-column:span 5; }
+      article:nth-child(2) { grid-column:span 7; }
+      article:nth-child(3) { grid-column:span 8; }
+      article:nth-child(4) { grid-column:span 4; }
+      article:nth-child(5) { grid-column:span 4; }
+      article:nth-child(6) { grid-column:span 8; }
+      article:first-child { margin-left:-34px;padding-left:64px; }
+      article:first-child .caption { left:64px; }
+    }
+    @media(max-width:1150px) {
+      main { inset:28px;grid-template-rows:repeat(2,minmax(0,1fr));gap:32px; }
+      article:nth-child(1) { grid-column:span 4; }
+      article:nth-child(2) { grid-column:span 3; }
+      article:nth-child(3) { grid-column:span 5; }
+      article:nth-child(4) { grid-column:span 3; }
+      article:nth-child(5) { grid-column:span 5; }
+      article:nth-child(6) { grid-column:span 4; }
+      article { padding:72px 20px 20px; }
+      h1,h2 { font-size:28px; }
+      .caption { left:20px;bottom:70px;font-size:11px; }
+      .number { font-size:52px; }
+      #launch { left:20px;right:auto;top:18px; }
+    }
+  </style>
+</head>
+<body>
+  <main id="content" aria-label="Field Archive 图片与研究记录">
+    <article><p class="eyebrow">FIELD ARCHIVE / 01</p><h1>山间的颜色</h1><p class="caption">自然影像 · 纹理与地貌</p><span class="number">084</span><button id="launch">试玩 PagePath</button></article>
+    <article><p class="eyebrow">DESIGN NOTES / 02</p><h2>城市切片</h2><p class="caption">建筑研究 · 昼与夜</p><span class="number">126</span></article>
+    <article><p class="eyebrow">OBSERVATION / 03</p><h2>潮汐记录</h2><p class="caption">海岸观察 · 持续更新</p><span class="number">057</span></article>
+    <article><p class="eyebrow">COLLECTION / 04</p><h2>材料档案</h2><p class="caption">日常器物 · 手作与工艺</p><span class="number">293</span></article>
+    <article><p class="eyebrow">STUDIO JOURNAL / 05</p><h2>光线实验</h2><p class="caption">视觉笔记 · 空间与时间</p><span class="number">041</span></article>
+    <article><p class="eyebrow">WORK IN PROGRESS / 06</p><h2>生长的秩序</h2><p class="caption">持续采样 · 图案与结构</p><span class="number">168</span></article>
+  </main>
+  <script>
+    // The layout itself is static and remains usable under script-src 'none'.
+    // Only the local browser harness uses this launch helper.
+    const modules = ['config','collision','grid','pathfinding','scoring','levelGenerator','mazeCleanup','mazeRoute','mazeConnectors','routeMazeGenerator','mazeGenerator',
+      'opencvRuntime','compactDom','compactMask','imageMapAnalyzer','mapCodec','overlay','pageSnapshot','game'];
+    let loaded;
+    document.getElementById('launch').onclick = async () => {
+      if (!globalThis.chrome?.runtime?.id) return;
+      loaded ||= ['/vendor/opencv/opencv.js', ...modules.map(name => `/src/content/${name}.js`)]
+        .reduce((promise, source) => promise.then(() => new Promise((resolve, reject) => {
+          const script = document.createElement('script');script.src = source;script.onload = resolve;script.onerror = reject;document.head.append(script);
+        })), Promise.resolve());
+      await loaded;
+      if (__PAGEPATH__.instance) return __PAGEPATH__.instance.destroy();
+      const game = new __PAGEPATH__.Game();__PAGEPATH__.instance = game;game.start();
+    };
+  </script>
+</body>
+</html>

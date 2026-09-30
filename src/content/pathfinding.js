@@ -3,6 +3,7 @@
   const P = globalThis.__PAGEPATH__ ||= {};
 
   function breadthFirst(grid, start, random = Math.random) {
+    if (grid.weighted) return shortestPaths(grid, start);
     const distances = new Int32Array(grid.walkable.length).fill(-1);
     const parents = new Int32Array(grid.walkable.length).fill(-1);
     const queue = new Int32Array(grid.walkableCount);
@@ -20,6 +21,55 @@
         distances[next] = distances[current] + 1;
         parents[next] = current;
         queue[tail++] = next;
+      }
+    }
+    return { distances, parents };
+  }
+
+  function shortestPaths(grid, start) {
+    const count = grid.walkable.length;
+    const distances = new Float64Array(count).fill(Infinity);
+    const parents = new Int32Array(count).fill(-1);
+    const positions = new Int32Array(count).fill(-1);
+    const heap = new Int32Array(count);
+    let size = 0;
+    function swap(a, b) {
+      [heap[a], heap[b]] = [heap[b], heap[a]];
+      positions[heap[a]] = a; positions[heap[b]] = b;
+    }
+    function update(id) {
+      let position = positions[id];
+      if (position < 0) { position = size++; heap[position] = id; positions[id] = position; }
+      while (position > 0) {
+        const parent = (position - 1) >> 1;
+        if (distances[heap[parent]] <= distances[id]) break;
+        swap(position, parent); position = parent;
+      }
+    }
+    function pop() {
+      const id = heap[0];
+      positions[id] = -2; size--;
+      if (size) {
+        heap[0] = heap[size]; positions[heap[0]] = 0;
+        let position = 0;
+        while (position * 2 + 1 < size) {
+          let child = position * 2 + 1;
+          if (child + 1 < size && distances[heap[child + 1]] < distances[heap[child]]) child++;
+          if (distances[heap[position]] <= distances[heap[child]]) break;
+          swap(position, child); position = child;
+        }
+      }
+      return id;
+    }
+    if (!Number.isInteger(start) || !grid.walkable[start]) return { distances, parents };
+    distances[start] = 0; update(start);
+    while (size) {
+      const current = pop();
+      for (const next of grid.neighbors(current)) {
+        if (positions[next] === -2) continue;
+        const distance = distances[current] + grid.edgeLength(current, next);
+        if (distance + 1e-9 >= distances[next]) continue;
+        distances[next] = distance; parents[next] = current; update(next);
       }
     }
     return { distances, parents };
@@ -155,5 +205,5 @@
     return order.reverse();
   }
 
-  P.Pathfinding = Object.freeze({ breadthFirst, trace, simplify, shortestVisitOrder });
+  P.Pathfinding = Object.freeze({ breadthFirst, shortestPaths, trace, simplify, shortestVisitOrder });
 })();

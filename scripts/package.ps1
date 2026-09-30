@@ -3,8 +3,10 @@ Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifestPath = Join-Path $projectRoot 'manifest.json'
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-$requiredFiles = @('manifest.json', 'README.md', 'docs/USAGE.md')
+$manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$requiredFiles = @('manifest.json', 'README.md', 'docs/USAGE.md',
+  'vendor/opencv/opencv.js', 'vendor/opencv/LICENSE',
+  'vendor/opencv/LICENSE.emscripten', 'vendor/opencv/README.md')
 foreach ($relativePath in $requiredFiles) {
   if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $relativePath) -PathType Leaf)) {
     throw "Missing release file: $relativePath"

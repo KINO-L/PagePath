@@ -60,7 +60,7 @@ function realTurns(route) {
 
 function verifyPlayable(level, analysis, exclusions = []) {
   const C = P.Config;
-  assert.ok(level.nodes.length >= 4 && level.nodes.length <= 12);
+  assert.ok(level.nodes.length >= C.MIN_NODES && level.nodes.length <= P.getMode('normal').maxNodes);
   const index = P.Collision.createIndex([...analysis.rects, ...exclusions]);
   let length = 0;
   for (let i = 1; i < level.referencePath.length; i++) {
@@ -79,8 +79,8 @@ function verifyPlayable(level, analysis, exclusions = []) {
   }
   assert.ok(Math.abs(length - level.referenceLength) < 0.001);
   assert.ok(level.maxInk > length, 'the verified route needs drawing tolerance');
-  assert.ok(level.maxInk <= length * 1.3,
-    'a second long excursion should no longer fit inside the old 50% spare ink allowance');
+  assert.ok(Math.abs(level.maxInk / length - 1.15) < 1e-10,
+    '萌新 must use the revised 15% spare ink allowance on its verified route');
   assert.equal(distance(level.referencePath[0], level.nodes[0]), 0);
   assert.equal(distance(level.referencePath.at(-1), level.nodes.at(-1)), 0);
 }
@@ -99,7 +99,7 @@ function generateSeeds(analysis, exclusions, inspect) {
 test('spacious pages require a two-dimensional tour with interior targets, 12 seeds', () => {
   const analysis = { width: 1200, height: 760, rects: [] };
   generateSeeds(analysis, reserved, level => {
-    assert.ok(level.nodes.length >= 9, 'a spacious map should have substantially more than six targets');
+    assert.ok(level.nodes.length >= 12, 'a spacious 萌新 map should reach the revised target count');
     assert.ok(hullArea(level.nodes) > analysis.width * analysis.height * 0.3,
       'targets must cover an area instead of clustering on one nearly straight shortest path');
     assert.ok(level.nodes.some(point => point.x > 240 && point.x < 960 && point.y > 152 && point.y < 608),
@@ -111,7 +111,7 @@ test('spacious pages require a two-dimensional tour with interior targets, 12 se
 test('a central obstacle gets targets on every side instead of one easy bypass, 12 seeds', () => {
   const analysis = { width: 1200, height: 760, rects: [rect(400, 250, 400, 240)] };
   generateSeeds(analysis, reserved, level => {
-    assert.ok(level.nodes.length >= 9);
+    assert.ok(level.nodes.length >= 12);
     for (const [side, contains] of [
       ['left', point => point.x < 400], ['right', point => point.x > 800],
       ['above', point => point.y < 250], ['below', point => point.y > 490],
@@ -125,7 +125,7 @@ test('card layouts send players through interior corridors in both directions, 1
   const analysis = { width: 1200, height: 760, rects: Array.from({ length: 6 }, (_, i) =>
     rect(100 + i % 3 * 350, 110 + Math.floor(i / 3) * 285, 270, 210)) };
   generateSeeds(analysis, reserved, level => {
-    assert.ok(level.nodes.length >= 9);
+    assert.ok(level.nodes.length >= 12);
     const columns = new Set(level.nodes.map(point => Math.min(2, Math.floor(point.x / 400))));
     const rows = new Set(level.nodes.map(point => Math.min(2, Math.floor(point.y / (760 / 3)))));
     assert.equal(columns.size, 3);
@@ -168,7 +168,7 @@ test('large viewport generation keeps the route safe and grid work bounded', () 
     const level = P.LevelGenerator.generate(analysis, [], random(seed));
     verifyPlayable(level, analysis);
     assert.ok(level.grid.walkable.length <= P.Config.MAX_GRID_CELLS);
-    assert.ok(level.nodes.length >= 9);
+    assert.ok(level.nodes.length >= 12);
     assert.ok(hullArea(level.nodes) > analysis.width * analysis.height * 0.3);
   }
 });

@@ -1,7 +1,7 @@
 const type = new URLSearchParams(location.search).get('type') || 'simple';
 const article = '网页中的内容构成了关卡的边界。观察文字之间、栏目之外的空白，找到一条连续的路线。每次生成关卡时，PagePath 都会先验证一条安全路径，再沿途放置节点。';
 const views = {
-  simple: `<section class="intro"><div class="eyebrow">THE WEBPAGE IS THE LEVEL</div><h1>留白，也有路径。</h1><div class="line"></div><p>文字、图片与按钮成为障碍。按住起点，从页面的空白中穿过，连接每一个节点。</p></section><aside class="floating-note">没有新世界。<br>这就是你正在浏览的网页。</aside>`,
+  simple: `<section class="intro"><div class="eyebrow">THE WEBPAGE IS THE LEVEL</div><h1>留白，也有路径。</h1><div class="line"></div><p>文字、图片与按钮成为障碍。单击起点，从页面的空白中穿过，连接每一个节点。</p></section><aside class="floating-note">没有新世界。<br>这就是你正在浏览的网页。</aside>`,
   article: `<article class="article"><div class="eyebrow">FIELD NOTES / 001</div><h1>在日常网页里，<br>发现一条新的路径</h1>${Array.from({ length: 8 }, () => `<p>${article.repeat(2)}</p>`).join('')}</article>`,
   github: `<div class="eyebrow">PAGEPATH / REPOSITORY</div><h1>pagepath</h1><div class="tags"><button>Code</button><button>Issues 12</button><button>Pull requests 3</button><input aria-label="Search" placeholder="Search files"></div><div class="columns"><pre class="code">function createPuzzle(viewport) {\n  const obstacles = analyze(viewport);\n  const grid = buildGrid(obstacles);\n  const route = findSafeRoute(grid);\n  return sampleNodes(route);\n}\n\n// The webpage is the level.\nexport { createPuzzle };</pre><aside class="panel"><h2>About</h2><p>Turn any webpage into a puzzle.</p><button>Star project</button></aside></div>`,
   dashboard: `<div class="eyebrow">WORKSPACE / OVERVIEW</div><h1>每一天的进展</h1><div class="cards">${['访问量','已完成','活跃项目','待办事项','平均时长','本周目标'].map((name,i) => `<section class="card"><p>${name}</p><div class="metric">${[1248,36,8,14,27,92][i]}</div><p>与上周相比 +12%</p></section>`).join('')}</div>`,
@@ -17,11 +17,17 @@ if (type === 'spa') {
 const spacer = document.createElement('div'); spacer.className = 'scroll-space'; document.body.append(spacer);
 // This local demo loads exactly the extension's modules in the same order.
 // It is a test harness only: the real extension injects into an isolated world.
-const scripts = ['config','collision','grid','pathfinding','scoring','levelGenerator','obstacleDetector','pageAnalyzer','overlay','pageSnapshot','game'];
+const scripts = ['config','collision','grid','pathfinding','scoring','mazeCleanup','mazeRoute','mazeConnectors','routeMazeGenerator','mazeGenerator','levelGenerator',
+  'opencvRuntime','compactDom','compactMask','imageMapAnalyzer','mapCodec','overlay','pageSnapshot','game'].map(name => `/src/content/${name}.js`);
+scripts.unshift('/vendor/opencv/opencv.js');
 let loaded;
 document.getElementById('launch').onclick = async () => {
-  loaded ||= scripts.reduce((promise, name) => promise.then(() => new Promise((resolve,reject) => {
-    const script = document.createElement('script'); script.src = `/src/content/${name}.js`; script.onload = resolve; script.onerror = reject; document.head.append(script);
+  if (!globalThis.chrome?.runtime?.id) {
+    document.getElementById('launch').textContent = '请点击浏览器工具栏中的 PagePath 扩展';
+    return;
+  }
+  loaded ||= scripts.reduce((promise, source) => promise.then(() => new Promise((resolve,reject) => {
+    const script = document.createElement('script'); script.src = source; script.onload = resolve; script.onerror = reject; document.head.append(script);
   })), Promise.resolve());
   await loaded;
   if (globalThis.__PAGEPATH__.instance) { globalThis.__PAGEPATH__.instance.destroy(); return; }

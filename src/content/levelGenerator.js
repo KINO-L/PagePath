@@ -6,7 +6,7 @@
     // Only position matters: changing IDs, visit order, or Start/Finish does not
     // make a map new. Keep this preference bounded even for malformed callers.
     const history = (Array.isArray(recentLayouts) ? recentLayouts.slice(-4) : [])
-      .filter(Array.isArray).map(layout => layout.slice(0, 16).filter(point =>
+      .filter(Array.isArray).map(layout => layout.slice(0, P.Config.MAX_NODES).filter(point =>
         point && Number.isFinite(point.x) && Number.isFinite(point.y))).filter(layout => layout.length);
     const weights = new Float64Array(grid.walkable.length).fill(1);
     if (!history.length) return weights;
@@ -168,6 +168,9 @@
             P.Pathfinding.trace(searches[i].parents, selected[i], selected[j]).map(grid.point), grid.obstacleIndex);
           const backward = P.Pathfinding.simplify(
             P.Pathfinding.trace(searches[j].parents, selected[j], selected[i]).map(grid.point), grid.obstacleIndex).reverse();
+          if (forward.length < 2 || backward.length < 2) {
+            throw new Error('截图地图的通道连接无效，请重新生成关卡。');
+          }
           path = pathLength(forward) <= pathLength(backward) ? forward : backward;
         }
         paths[i][j] = path;
@@ -203,47 +206,80 @@
   function generate(analysis, reservedRects = [], random = Math.random, modeId = P.Config.DEFAULT_MODE, recentLayouts = []) {
     const C = P.Config;
     const mode = P.getMode(modeId);
+    if (mode.id === 'maze') return P.MazeGenerator.generate(analysis, reservedRects, random);
     if (!Number.isFinite(analysis.width) || !Number.isFinite(analysis.height) ||
       analysis.width < 160 || analysis.height < 160) {
       throw new Error('窗口太小，无法生成路线。请扩大浏览器窗口后重试。');
     }
-    const grid = P.Grid.build(analysis.width, analysis.height, analysis.rects, reservedRects);
-    const candidates = grid.largestComponent.filter(id => {
+    const isMask = analysis.kind === 'pixel-mask';
+    const grid = isMask ? P.Grid.buildMask(analysis)
+      : P.Grid.build(analysis.width, analysis.height, analysis.rects, reservedRects);
+    const candidateSet = isMask ? new Set(grid.candidateIds) : null;
+    const eligible = id => {
       const point = grid.point(id);
       const margin = C.EDGE_MARGIN + C.HIT_RADIUS;
       return point.x >= margin && point.y >= margin && point.x <= analysis.width - margin &&
-        point.y <= analysis.height - margin && !P.Collision.pointHits(point, grid.obstacleIndex, C.NODE_CLEARANCE);
-    });
-    if (candidates.length < C.MIN_NODES) {
+        point.y <= analysis.height - margin && (!isMask || candidateSet.has(id)) &&
+        !P.Collision.pointHits(point, grid.obstacleIndex, C.NODE_CLEARANCE) &&
+        (!isMask || !reservedRects.some(rect => point.x >= rect.x - C.NODE_CLEARANCE &&
+          point.y >= rect.y - C.NODE_CLEARANCE && point.x <= rect.x + rect.width + C.NODE_CLEARANCE &&
+          point.y <= rect.y + rect.height + C.NODE_CLEARANCE));
+    };
+    const candidatePools = [];
+    if (isMask) {
+      for (const component of grid.components) {
+        const available = component.filter(eligible);
+        if (available.length < C.MIN_NODES) continue;
+        const comfortable = available.filter(id => {
+          const point = grid.point(id);
+          return analysis.distanceMap[Math.floor(point.y) * analysis.width + Math.floor(point.x)] >= C.NODE_CLEARANCE;
+        });
+        if (comfortable.length >= C.MIN_NODES) candidatePools.push(comfortable);
+        // Keep each pool confined to one actual component. A large but cramped
+        // room must not prevent trying a smaller component that fits a puzzle.
+        if (comfortable.length < available.length) candidatePools.push(available);
+      }
+      // Clearance is only a placement preference. A genuinely traversable thin
+      // component can still host a puzzle without changing the shared mask.
+    } else {
+      const available = grid.largestComponent.filter(eligible);
+      if (available.length >= C.MIN_NODES) candidatePools.push(available);
+    }
+    if (!candidatePools.length) {
       throw new Error('这片页面空白不足。请滚动到更宽敞的区域，再生成关卡。');
     }
     const baseDifficulty = P.Scoring.difficulty(analysis, grid, C.MIN_NODES);
     const desired = Math.min(mode.maxNodes, mode.targetNodes + Math.floor(baseDifficulty / 14));
-    const freshness = historyWeights(grid, candidates, recentLayouts);
-    let best, bestQuality = -Infinity, sector;
+    const freshness = historyWeights(grid, [...new Set(candidatePools.flat())], recentLayouts);
+    let candidates, best;
     // Only the winning proposal gets full graph searches and a reference tour.
     // Three small candidate pools improve variation without tripling pathfinding.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const sample = landmarkPool(grid, candidates, desired, random, freshness);
-      sector = sample.sector;
-      const proposal = selectLandmarks(grid, candidates, desired, random, sample.initial,
-        sample.pool, sample.sector, freshness);
-      const quality = layoutQuality(grid, proposal.selected, freshness);
-      if (!best || proposal.selected.length > best.selected.length ||
-          proposal.selected.length === best.selected.length && quality > bestQuality) {
-        best = proposal; bestQuality = quality;
+    for (const pool of candidatePools) {
+      candidates = pool; best = undefined;
+      let bestQuality = -Infinity, sector;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const sample = landmarkPool(grid, candidates, desired, random, freshness);
+        sector = sample.sector;
+        const proposal = selectLandmarks(grid, candidates, desired, random, sample.initial,
+          sample.pool, sample.sector, freshness);
+        const quality = layoutQuality(grid, proposal.selected, freshness);
+        if (!best || proposal.selected.length > best.selected.length ||
+            proposal.selected.length === best.selected.length && quality > bestQuality) {
+          best = proposal; bestQuality = quality;
+        }
       }
-    }
-    // Starting at an extreme can fit four spaced nodes that a central first
-    // choice would exclude on an awkward small component.
-    for (let attempt = 1; best.selected.length < C.MIN_NODES && attempt < C.GENERATION_ATTEMPTS; attempt++) {
-      const corner = candidates.reduce((id, candidate) => {
-        const a = grid.point(id), b = grid.point(candidate);
-        const sx = attempt & 1 ? -1 : 1, sy = attempt & 2 ? -1 : 1;
-        return sx * b.x + sy * b.y < sx * a.x + sy * a.y ? candidate : id;
-      });
-      const proposal = selectLandmarks(grid, candidates, desired, random, corner, candidates, sector, freshness);
-      if (proposal.selected.length > best.selected.length) best = proposal;
+      // Starting at an extreme can fit four spaced nodes that a central first
+      // choice would exclude on an awkward small component.
+      for (let attempt = 1; best.selected.length < C.MIN_NODES && attempt < C.GENERATION_ATTEMPTS; attempt++) {
+        const corner = candidates.reduce((id, candidate) => {
+          const a = grid.point(id), b = grid.point(candidate);
+          const sx = attempt & 1 ? -1 : 1, sy = attempt & 2 ? -1 : 1;
+          return sx * b.x + sy * b.y < sx * a.x + sy * a.y ? candidate : id;
+        });
+        const proposal = selectLandmarks(grid, candidates, desired, random, corner, candidates, sector, freshness);
+        if (proposal.selected.length > best.selected.length) best = proposal;
+      }
+      if (best.selected.length >= C.MIN_NODES) break;
     }
     if (best.selected.length < C.MIN_NODES) {
       throw new Error('没有找到足够宽敞的连续路线。请换一个页面位置，再试一次。');
@@ -258,6 +294,10 @@
     for (let i = 1; i < order.length; i++) {
       const section = connections.paths[order[i - 1]][order[i]];
       referencePath.push(...(referencePath.length ? section.slice(1) : section));
+    }
+    if (referencePath.length < 2 || referencePath.some((point, i) => i > 0 &&
+        P.Collision.segmentHits(referencePath[i - 1], point, grid.obstacleIndex))) {
+      throw new Error('参考路线未通过截图碰撞验证，请重新生成关卡。');
     }
     const referenceLength = pathLength(referencePath);
     const challenge = challengeMetrics(nodes, referencePath, analysis, connections.blockedSightlineRatio);

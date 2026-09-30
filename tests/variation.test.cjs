@@ -92,7 +92,7 @@ test('placement comparison rejects reordered copies and small coordinate jitter'
   assert.equal(placementDifference(points.map(point => ({ x: point.x + 64, y: point.y })), points).moved64, 1);
 });
 
-for (const [name, analysis] of Object.entries(pages)) for (const mode of ['normal', 'hell']) {
+for (const [name, analysis] of Object.entries(pages)) for (const mode of ['normal', 'hell', 'immortal']) {
   test(`${name} ${mode}: successive maps relocate most targets instead of reordering the same layout`, () => {
     for (const seed of [92142, 81083]) {
       const rng = random(seed);
@@ -122,7 +122,7 @@ for (const [name, analysis] of Object.entries(pages)) for (const mode of ['norma
 }
 
 test('the recent four maps avoid repetition even when the random seed repeats', () => {
-  for (const analysis of Object.values(pages)) for (const mode of ['normal', 'hell']) {
+  for (const analysis of Object.values(pages)) for (const mode of ['normal', 'hell', 'immortal']) {
     let history = Object.freeze([]);
     for (let map = 0; map < 6; map++) {
       const level = generate(analysis, reserved, random(842), mode, history);
@@ -141,7 +141,7 @@ test('the recent four maps avoid repetition even when the random seed repeats', 
 });
 
 test('identical seed and immutable history reproduce nodes, reference route, and ink exactly', () => {
-  for (const mode of ['normal', 'hell']) {
+  for (const mode of ['normal', 'hell', 'immortal']) {
     let history = Object.freeze([]);
     const rng = random(12345);
     for (let map = 0; map < 4; map++) {
@@ -162,7 +162,7 @@ test('history never sacrifices a safe fallback on tiny pages or narrow corridors
     { width: 180, height: 180, rects: [] },
     { width: 800, height: 760, rects: [rect(0, 0, 360, 760), rect(440, 0, 360, 760)] },
   ];
-  for (const analysis of constrained) for (const mode of ['normal', 'hell']) {
+  for (const analysis of constrained) for (const mode of ['normal', 'hell', 'immortal']) {
     let history = Object.freeze([]);
     for (let map = 0; map < 6; map++) {
       const level = generate(analysis, [], random(407 + map), mode, history);
@@ -170,4 +170,20 @@ test('history never sacrifices a safe fallback on tiny pages or narrow corridors
       history = remember(history, level);
     }
   }
+});
+
+test('recent-layout avoidance includes the last four targets of a twenty-node map', () => {
+  const analysis = pages.spacious;
+  // A full-sized previous layout: all twenty points fit with real target
+  // spacing, even if this new page's density asks for only eighteen targets.
+  const previous = { nodes: Array.from({ length: 20 }, (_, i) => ({
+    x: 120 + i % 5 * 220, y: 160 + Math.floor(i / 5) * 160,
+  })) };
+  const complete = remember([], previous);
+  const truncated = Object.freeze([Object.freeze(complete[0].slice(0, 16))]);
+  const fullHistoryMap = generate(analysis, reserved, random(842), 'immortal', complete);
+  const oldLimitMap = generate(analysis, reserved, random(842), 'immortal', truncated);
+  verifyPlayable(fullHistoryMap, analysis, reserved, 'immortal');
+  assert.notDeepEqual(fullHistoryMap.nodes, oldLimitMap.nodes,
+    'the final four previous positions must influence the next placement instead of being discarded');
 });

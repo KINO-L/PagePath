@@ -101,10 +101,19 @@
     image.removeAttribute("src");
   }
 
+  function assertLayoutViewport() {
+    const visual = window.visualViewport;
+    if (visual && (Math.abs(visual.scale - 1) > 0.001 ||
+        Math.abs(visual.offsetLeft) > 0.5 || Math.abs(visual.offsetTop) > 0.5)) {
+      throw new Error("请先恢复触控手势缩放，再生成关卡；可使用浏览器菜单调整缩放");
+    }
+  }
+
   async function capture({ overlay, signal } = {}) {
     assertActive(signal);
     if (!available()) throw new Error("当前环境不支持固定页面，请通过浏览器扩展启动");
     if (!overlay?.host?.isConnected) throw abortError();
+    assertLayoutViewport();
 
     let resumeAnimations = () => {};
     overlay.setCaptureHidden(true);
@@ -116,17 +125,14 @@
         await nextPaint(signal);
         await nextPaint(signal);
         assertActive(signal);
+        assertLayoutViewport();
         const bounds = viewport();
-        const analysis = P.PageAnalyzer.analyze({ excludeElement: overlay.host });
-        let invalidated = false;
         let image = null;
         let retained = false;
-        const unwatch = P.PageAnalyzer.watch(analysis, {
-          excludeElement: overlay.host,
-          onChange: () => { invalidated = true; }
-        });
         try {
-          const response = await abortable(() => globalThis.chrome.runtime.sendMessage({ type: "PAGEPATH_CAPTURE" }), signal);
+          const response = await abortable(() => globalThis.chrome.runtime.sendMessage({
+            type: "PAGEPATH_CAPTURE", bounds: { width: bounds.width, height: bounds.height, dpr: bounds.dpr }
+          }), signal, 30000);
           assertActive(signal);
           if (!response?.ok || !/^data:image\/(?:png|jpeg|webp);base64,/.test(response.dataUrl || "")) {
             throw new Error(response?.error || "无法固定当前页面，请重新点击扩展后重试");
@@ -138,10 +144,22 @@
           assertActive(signal);
           if (!overlay.host.isConnected) throw abortError();
           if (!image.naturalWidth || !image.naturalHeight) throw new Error("页面截图为空，请重试");
-          if (unwatch.check(true) || invalidated || !sameViewport(bounds)) {
+          if (!sameViewport(bounds)) {
             if (attempt === 0) continue;
-            throw new Error("截图时页面仍在变化，请稍候再试");
+            throw new Error("截图时窗口尺寸或缩放发生变化，请重试");
           }
+          if (bounds.width * bounds.height > P.Config.PIXEL_MAP.MAX_PIXELS) {
+            throw new Error("视口像素过多，请缩小浏览器窗口后重试");
+          }
+          resumeAnimations();
+          // OpenCV runs in the extension worker: the host site's CSP cannot
+          // prohibit its WASM. Decode the exact cached pixel masks it returns.
+          const analysis = await P.MapCodec.decode(response.map);
+          assertActive(signal);
+          if (analysis.width !== bounds.width || analysis.height !== bounds.height) {
+            throw new Error("截图地图与当前视口尺寸不一致，请重新生成");
+          }
+          if (!sameViewport(bounds)) throw new Error("分析时窗口尺寸或缩放发生变化，请重试");
           retained = true;
           const snapshotImage = image;
           return {
@@ -152,7 +170,6 @@
             destroy() { releaseImage(snapshotImage); }
           };
         } finally {
-          unwatch();
           if (!retained) releaseImage(image);
         }
       }
