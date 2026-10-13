@@ -21,7 +21,7 @@
     return true;
   }
 
-  function plan(source, referencePath, random = Math.random) {
+  function plan(source, referencePath, random = Math.random, options = {}) {
     const { width, height, obstacleMask: original } = source || {};
     const size = width * height;
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 2 || height < 2 ||
@@ -195,6 +195,11 @@
       // unnecessary. This keeps irregular website corridors largely intact.
       if (!stroke(a, c, clearance + 0.5, width, height, at => !original[at])) continue;
       const baseAngle = Math.atan2(dy, dx), sign = clampRandom(random) < 0.5 ? -1 : 1;
+      // A new baffle bends across the open background; it is never a pair of
+      // parallel rails around the answer. Leave more room around easy tips.
+      const controlled = Number.isFinite(options.intensity);
+      const intensity = controlled ? Math.max(0, Math.min(1, options.intensity)) : 0;
+      const tipGap = controlled ? 17 - intensity * 8 : 0;
       const angles = [sign * 0.12, -sign * 0.12, 0, sign * 0.24, -sign * 0.24];
       let selected = null;
       for (const offset of angles) {
@@ -211,29 +216,40 @@
             if (tip >= 0) anchorAt = at;
             break;
           }
-          if (tip < 0) tip = at;
+          if (tip < 0 && d >= tipGap) tip = at;
         }
         if (anchorAt < 0 || tip < 0) continue;
         const anchorPoint = point(anchorAt), tipPoint = point(tip);
         if (Math.hypot(anchorPoint.x - tipPoint.x, anchorPoint.y - tipPoint.y) < 8) continue;
-        const pixels = new Set();
-        let blocksShortcut = false;
         const acx = c.x - a.x, acy = c.y - a.y, ac2 = acx * acx + acy * acy;
-        const valid = stroke(anchorPoint, tipPoint, RADIUS, width, height, at => {
-          if (protectedPixels[at]) return false;
-          const p = point(at), nearAnchor = Math.hypot(p.x - anchorPoint.x, p.y - anchorPoint.y) <= 4;
-          if (obstacleMask[at] && !original[at] && !nearAnchor) return false;
-          if (original[at] && !nearAnchor) return false;
-          const t = ac2 ? Math.max(0, Math.min(1, ((p.x - a.x) * acx + (p.y - a.y) * acy) / ac2)) : 0;
-          if (Math.hypot(p.x - a.x - t * acx, p.y - a.y - t * acy) <= clearance) blocksShortcut = true;
-          pixels.add(at);
-        });
-        if (valid && blocksShortcut) { selected = { anchorPoint, tipPoint, anchorAt, pixels }; break; }
+        const vx = tipPoint.x - anchorPoint.x, vy = tipPoint.y - anchorPoint.y, span = Math.hypot(vx, vy);
+        const kink = Math.min(26, span * .12) * (clampRandom(random) < .5 ? -1 : 1);
+        const bendPoint = { x: anchorPoint.x + vx * .48 - vy / span * kink,
+          y: anchorPoint.y + vy * .48 + vx / span * kink };
+        const proposals = controlled ? [[anchorPoint, bendPoint, tipPoint], [anchorPoint, tipPoint]]
+          : [[anchorPoint, tipPoint]];
+        for (const points of proposals) {
+          const pixels = new Set();
+          let valid = true, blocksShortcut = false;
+          for (let segment = 1; segment < points.length && valid; segment++) {
+            valid = stroke(points[segment - 1], points[segment], RADIUS, width, height, at => {
+              if (protectedPixels[at]) return false;
+              const p = point(at), nearAnchor = Math.hypot(p.x - anchorPoint.x, p.y - anchorPoint.y) <= 4;
+              if (obstacleMask[at] && !original[at] && !nearAnchor) return false;
+              if (original[at] && !nearAnchor) return false;
+              const t = ac2 ? Math.max(0, Math.min(1, ((p.x - a.x) * acx + (p.y - a.y) * acy) / ac2)) : 0;
+              if (Math.hypot(p.x - a.x - t * acx, p.y - a.y - t * acy) <= clearance) blocksShortcut = true;
+              pixels.add(at);
+            });
+          }
+          if (valid && blocksShortcut) { selected = { anchorPoint, anchorAt, pixels, points }; break; }
+        }
+        if (selected) break;
       }
       if (!selected) continue;
-      const { anchorPoint, tipPoint, anchorAt, pixels } = selected;
+      const { anchorPoint, anchorAt, pixels, points } = selected;
       const componentId = labels[anchorAt] || 1;
-      wallSegments.push({ kind: 'baffle', points: [anchorPoint, tipPoint], width: WIDTH,
+      wallSegments.push({ kind: 'baffle', points, width: WIDTH,
         anchors: [{ ...anchorPoint, componentId, kind: original[anchorAt] ? 'obstacle' : 'viewport' }],
         components: [componentId] });
       for (const at of pixels) {
@@ -250,5 +266,125 @@
       candidates: choices.length, connectors: wallSegments.length, baffles, addedPixels,
       protectionRadius, endpointRadius, rejectedProtected, rejectedGeometry } };
   }
-  P.MazeConnectors = Object.freeze({ plan });
+  // Close shallow branch mouths for easy targets with short foreground-to-
+  // foreground strokes. The answer and its endpoint icons remain protected;
+  // callers rebuild the shared masks and accept only a measured improvement.
+  function sealBranches(analysis, referencePath, options = {}) {
+    const { width, height, obstacleMask: original, walkableMask, componentLabels } = analysis;
+    const obstacleMask = new Uint8Array(original), wallSegments = [], size = width * height;
+    const protectedPixels = new Uint8Array(size), maxLength = options.maxLength ?? 80;
+    const pathProtection = options.pathProtection ?? 8, endpointProtection = options.endpointProtection ?? 14;
+    const maxLines = options.maxLines ?? 128, G = P.MazeGeometry;
+    for (let i = 1; i < referencePath.length; i++) {
+      stroke(referencePath[i - 1], referencePath[i], pathProtection, width, height, at => { protectedPixels[at] = 1; });
+    }
+    for (const p of [referencePath[0], referencePath.at(-1)]) {
+      stroke(p, p, endpointProtection, width, height, at => { protectedPixels[at] = 1; });
+    }
+    const pointDistance = p => {
+      let nearest = Infinity;
+      for (let i = 1; i < referencePath.length; i++) {
+        const a = referencePath[i - 1], b = referencePath[i], dx = b.x - a.x, dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        nearest = Math.min(nearest, Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy));
+      }
+      return nearest;
+    };
+    const componentId = componentLabels[Math.floor(referencePath[0].y) * width + Math.floor(referencePath[0].x)];
+    const transposed = new Uint8Array(size);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const at = y * width + x;
+      if (walkableMask[at] && componentLabels[at] === componentId) transposed[x * height + y] = 1;
+    }
+    const proposals = [];
+    for (const vertical of [false, true]) {
+      const graph = vertical ? G.decompose(transposed, transposed, 1, height, width)
+        : G.decompose(walkableMask, componentLabels, componentId, width, height);
+      if (!graph) continue;
+      const convert = p => vertical ? { x: p.y, y: p.x } : p;
+      const start = convert(referencePath[0]), finish = convert(referencePath.at(-1));
+      const vertexAt = p => graph.vertices.findIndex(v => p.x >= v.left && p.x < v.right && p.y >= v.top && p.y < v.bottom);
+      const from = vertexAt(start), to = vertexAt(finish);
+      if (from < 0 || to < 0) continue;
+      const parent = new Int32Array(graph.vertices.length).fill(-1), via = new Int32Array(graph.vertices.length).fill(-1);
+      const queue = [from]; parent[from] = from;
+      for (let i = 0; i < queue.length && parent[to] < 0; i++) for (const next of graph.adjacency[queue[i]]) {
+        if (parent[next.id] >= 0) continue;
+        parent[next.id] = queue[i]; via[next.id] = next.edge; queue.push(next.id);
+      }
+      if (parent[to] < 0) continue;
+      const routeEdges = new Set();
+      for (let at = to; at !== from; at = parent[at]) routeEdges.add(via[at]);
+      for (let i = 0; i < graph.edges.length; i++) {
+        if (routeEdges.has(i)) continue;
+        const edge = graph.edges[i];
+        if (edge.portal.width > maxLength) continue;
+        const point = convert(edge.point), gap = pointDistance(point);
+        // Deeper portals may leave a short safe stub when the exact mouth is
+        // inside the answer's clearance. Remote parts of the page are untouched.
+        if (gap < pathProtection - 6 || gap > 36) continue;
+        proposals.push({ vertical, edge, gap });
+      }
+    }
+    proposals.sort((a, b) => a.gap - b.gap || a.edge.portal.width - b.edge.portal.width);
+    const seen = new Set(), sealedSpans = [];
+    const navigationMask = new Uint8Array(walkableMask), reachable = new Uint8Array(size), floodQueue = new Int32Array(size);
+    const startPixel = Math.floor(referencePath[0].y) * width + Math.floor(referencePath[0].x);
+    function refreshReachability() {
+      reachable.fill(0);
+      let head = 0, tail = 1; floodQueue[0] = startPixel; reachable[startPixel] = 1;
+      const visit = next => {
+        if (navigationMask[next] && !reachable[next]) { reachable[next] = 1; floodQueue[tail++] = next; }
+      };
+      while (head < tail) {
+        const index = floodQueue[head++], x = index % width;
+        if (x) visit(index - 1);
+        if (x + 1 < width) visit(index + 1);
+        if (index >= width) visit(index - width);
+        if (index + width < size) visit(index + width);
+      }
+    }
+    refreshReachability();
+    for (const proposal of proposals) {
+      if (wallSegments.length >= maxLines) break;
+      const { vertical, edge } = proposal, span = vertical ? height : width, across = vertical ? width : height;
+      const at = (along, cross) => vertical ? along * width + cross : cross * width + along;
+      const point = (along, cross) => vertical ? { x: cross + .5, y: along + .5 } : { x: along + .5, y: cross + .5 };
+      for (const shift of [0, -3, 3, -6, 6, -10, 10]) {
+        const cross = Math.floor(edge.point.y) + shift, center = Math.floor(edge.point.x);
+        if (cross < 0 || cross >= across || center < 0 || center >= span ||
+            obstacleMask[at(center, cross)] || !reachable[at(center, cross)]) continue;
+        let left = center, right = center;
+        while (left > 0 && !obstacleMask[at(left, cross)] && center - left <= maxLength) left--;
+        while (right + 1 < span && !obstacleMask[at(right, cross)] && right - left <= maxLength) right++;
+        if (right - left > maxLength || right - left < 3) continue;
+        if (sealedSpans.some(sealed => sealed.vertical === vertical && Math.abs(sealed.cross - cross) < 18 &&
+            Math.min(sealed.right, right) - Math.max(sealed.left, left) >= Math.min(sealed.right - sealed.left, right - left) * .6)) continue;
+        const key = `${vertical}:${cross}:${left}:${right}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const a = point(left, cross), b = point(right, cross), pixels = [];
+        if (!stroke(a, b, RADIUS, width, height, index => {
+          if (protectedPixels[index]) return false;
+          pixels.push(index);
+        })) continue;
+        if (!pixels.some(index => !obstacleMask[index])) continue;
+        const anchor = (p, index, boundary) => ({ ...p,
+          kind: original[index] ? 'obstacle' : boundary ? 'viewport' : 'connector' });
+        wallSegments.push({ kind: 'branch-seal', width: WIDTH, points: [a, b],
+          anchors: [anchor(a, at(left, cross), left === 0), anchor(b, at(right, cross), right === span - 1)] });
+        sealedSpans.push({ vertical, cross, left, right });
+        for (const index of pixels) obstacleMask[index] = 1;
+        // Stop placing extra lines inside a branch already disconnected by an
+        // earlier seal. This conservative navigation mask only filters proposals;
+        // the caller's EDT rebuild remains the authoritative collision map.
+        stroke(a, b, RADIUS + (analysis.stats?.walkableThreshold ?? 2 + Math.SQRT1_2) + Math.SQRT1_2,
+          width, height, index => { navigationMask[index] = 0; });
+        refreshReachability();
+        break;
+      }
+    }
+    return { obstacleMask, wallSegments };
+  }
+  P.MazeConnectors = Object.freeze({ plan, sealBranches });
 })();

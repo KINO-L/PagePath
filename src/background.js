@@ -1,11 +1,11 @@
 /* MV3: activeTab grants access only after an explicit toolbar click.
  * Pixel analysis stays in this extension worker so a webpage's CSP cannot block
  * WebAssembly. Only the cached map and screenshot are returned to its top frame. */
-importScripts('content/config.js', '../vendor/opencv/opencv.js',
+importScripts('content/config.js', 'content/scoring.js', 'content/progression.js', '../vendor/opencv/opencv.js',
   'content/opencvRuntime.js', 'content/compactMask.js', 'content/imageMapAnalyzer.js', 'content/mapCodec.js');
 const CONTENT_FILES = [
-  "src/content/config.js", "src/content/collision.js", "src/content/grid.js",
-  "src/content/pathfinding.js", "src/content/scoring.js", "src/content/mazeCleanup.js", "src/content/mazeRoute.js",
+  "src/content/config.js", "src/content/collision.js", "src/content/scoring.js",
+  "src/content/progression.js", "src/content/mazeCleanup.js", "src/content/mazeRoute.js",
   "src/content/mazeConnectors.js", "src/content/routeMazeGenerator.js",
   "src/content/mazeGenerator.js", "src/content/levelGenerator.js",
   "src/content/mapCodec.js", "src/content/compactDom.js",
@@ -17,6 +17,11 @@ const navigationVersions = new Map();
 const activationVersions = new Map();
 let captureQueue = Promise.resolve();
 let nextCaptureTime = 0;
+const PROFILE_KEY = 'pagepath.progress.v3';
+const PENDING_KEY = 'pagepath.pending.v3';
+const pendingSettlements = new Map();
+let profileQueue = Promise.resolve();
+let pendingLoaded = false, pendingRetryTimer = 0, pendingRetryCount = 0;
 const DEFAULT_TITLE = "PagePath · 点击开始 / 关闭";
 const CAPTURE_CHANGED = "页面已切换，请回到原页面后重新开始。";
 const CAPTURE_FAILED = "暂时无法固定页面，请稍后重新开始。";
@@ -184,6 +189,115 @@ function supportedPage(url) {
   } catch { return false; }
 }
 
+function validSettlement(message) {
+  const { level, stats, runId } = message || {};
+  const bounded = (value, low, high) => typeof value === 'number' && Number.isFinite(value) && value >= low && value <= high;
+  return message?.type === 'PAGEPATH_COMPLETE' && typeof runId === 'string' && /^[a-zA-Z0-9_-]{1,96}$/.test(runId) &&
+    Boolean(level) && bounded(level.difficulty, 0, 100) &&
+    (level.challenge?.complexity === undefined || bounded(level.challenge.complexity, 0, 1)) &&
+    Boolean(globalThis.__PAGEPATH__.Scoring.collectionStats(stats));
+}
+
+function settlementReceipt(message) {
+  const { runId, level, stats } = message;
+  return { type: 'PAGEPATH_COMPLETE', runId,
+    level: { difficulty: level.difficulty,
+      challenge: level.challenge?.complexity === undefined ? {} : { complexity: level.challenge.complexity } },
+    stats: globalThis.__PAGEPATH__.Scoring.collectionStats(stats) };
+}
+
+async function loadPendingSettlements() {
+  if (pendingLoaded) return;
+  if (!chrome.storage.session) { pendingLoaded = true; return; }
+  try {
+    const saved = await chrome.storage.session.get(PENDING_KEY);
+    for (const receipt of Array.isArray(saved[PENDING_KEY]) ? saved[PENDING_KEY] : []) {
+      if (validSettlement(receipt) && !pendingSettlements.has(receipt.runId)) {
+        pendingSettlements.set(receipt.runId, settlementReceipt(receipt));
+      }
+    }
+    pendingLoaded = true;
+  } catch { /* The in-memory queue still retries; session access may recover. */ }
+}
+
+async function mirrorPendingSettlements() {
+  // An unread session snapshot may contain receipts from an older worker.
+  // Do not replace it until those receipts have been merged into this queue.
+  if (!pendingLoaded || !chrome.storage.session) return;
+  try { await chrome.storage.session.set({ [PENDING_KEY]: [...pendingSettlements.values()] }); }
+  catch { /* A session mirror failure must not prevent the durable local write. */ }
+}
+
+async function settlePending() {
+  const P = globalThis.__PAGEPATH__, retryDelays = pendingSettlements.size ? [250, 750, 1500, 3000] : [];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const saved = await chrome.storage.local.get(PROFILE_KEY);
+      let profile = P.Progression.normalize(saved[PROFILE_KEY]), changed = false;
+      const results = new Map(), receipts = [...pendingSettlements.values()];
+      for (const receipt of receipts) {
+        const score = P.Scoring.calculate(receipt.level, receipt.stats);
+        const award = P.Progression.award(profile, { ...score, runId: receipt.runId });
+        profile = award.profile; changed ||= award.awarded;
+        results.set(receipt.runId, { ...score, xp: award.rewardXp, awarded: award.awarded,
+          previousLevel: award.previousLevel, level: award.level, title: award.title,
+          leveledUp: award.leveledUp, levelsGained: award.levelsGained });
+      }
+      if (changed) await chrome.storage.local.set({ [PROFILE_KEY]: profile });
+      for (const receipt of receipts) pendingSettlements.delete(receipt.runId);
+      if (receipts.length) await mirrorPendingSettlements();
+      clearTimeout(pendingRetryTimer); pendingRetryTimer = 0; pendingRetryCount = 0;
+      return { profile, results };
+    } catch (error) {
+      if (attempt >= retryDelays.length) throw error;
+      await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
+    }
+  }
+}
+
+function schedulePendingRetry() {
+  if (!pendingSettlements.size || pendingRetryTimer) return;
+  const delay = Math.min(30000, 10000 * 2 ** Math.min(pendingRetryCount++, 2));
+  pendingRetryTimer = setTimeout(() => {
+    pendingRetryTimer = 0;
+    const operation = profileQueue.then(async () => { await loadPendingSettlements(); await settlePending(); });
+    profileQueue = operation.then(() => {}, () => {});
+    operation.then(schedulePendingRetry, schedulePendingRetry);
+  }, delay);
+}
+
+function progressMessage(message, sender, sendResponse) {
+  if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isInteger(sender.tab?.id) ||
+      sender.tab.id < 0 || !supportedPage(sender.url || sender.tab.url)) {
+    sendResponse({ ok: false, error: '无法读取当前游戏进度' }); return;
+  }
+  const P = globalThis.__PAGEPATH__;
+  if (message.type === 'PAGEPATH_COMPLETE' && !validSettlement(message)) {
+    sendResponse({ ok: false, error: '本局成绩数据无效' }); return;
+  }
+  // All tabs share one extension profile. Serialize read-modify-write so
+  // simultaneous completions cannot overwrite each other's experience.
+  const operation = profileQueue.then(async () => {
+    await loadPendingSettlements();
+    if (message.type === 'PAGEPATH_COMPLETE' && !pendingSettlements.has(message.runId)) {
+      pendingSettlements.set(message.runId, settlementReceipt(message));
+      // Session storage survives worker restarts without recording page data.
+      // A local storage failure cannot discard an already received receipt.
+      await mirrorPendingSettlements();
+    }
+    const settled = await settlePending();
+    return { ok: true, profile: P.Progression.view(settled.profile), profileData: settled.profile,
+      ...(message.type === 'PAGEPATH_COMPLETE' ? { result: settled.results.get(message.runId) } : {}) };
+  });
+  profileQueue = operation.then(() => {}, () => {});
+  operation.then(sendResponse, () => {
+    schedulePendingRetry(); sendResponse({ ok: false, error: '进度正在自动重试' });
+  });
+}
+
+// Recover receipts after an MV3 worker suspension even if the game was closed.
+profileQueue = profileQueue.then(loadPendingSettlements).then(schedulePendingRetry, () => {});
+
 async function unavailable(tabId) {
   // A small explanatory extension popup is used only on restricted pages;
   // the actual game always lives on the webpage. openPopup may require a gesture.
@@ -218,6 +332,10 @@ chrome.action.onClicked.addListener(async (tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'PAGEPATH_PROFILE' || message?.type === 'PAGEPATH_COMPLETE') {
+    progressMessage(message, sender, sendResponse);
+    return true;
+  }
   if (message?.type === "PAGEPATH_CAPTURE") {
     capturePage(message, sender, sendResponse);
     return true;

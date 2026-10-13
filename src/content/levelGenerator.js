@@ -1,312 +1,175 @@
 (() => {
   'use strict';
   const P = globalThis.__PAGEPATH__ ||= {};
+  const draw = random => Math.max(0, Math.min(1 - Number.EPSILON, Number(random()) || 0));
+  const squareDistance = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
 
-  function historyWeights(grid, candidates, recentLayouts) {
-    // Only position matters: changing IDs, visit order, or Start/Finish does not
-    // make a map new. Keep this preference bounded even for malformed callers.
-    const history = (Array.isArray(recentLayouts) ? recentLayouts.slice(-4) : [])
-      .filter(Array.isArray).map(layout => layout.slice(0, P.Config.MAX_NODES).filter(point =>
-        point && Number.isFinite(point.x) && Number.isFinite(point.y))).filter(layout => layout.length);
-    const weights = new Float64Array(grid.walkable.length).fill(1);
-    if (!history.length) return weights;
-    const radius = P.Config.NODE_MIN_DISTANCE * 1.5;
-    for (const id of candidates) {
-      const point = grid.point(id);
-      let sum = 0, total = 0;
-      history.forEach((layout, index) => {
-        const recency = index === history.length - 1 ? 4 : 1;
-        let nearest = Infinity;
-        for (const previous of layout) nearest = Math.min(nearest, P.Collision.distance(point, previous));
-        sum += recency * Math.min(1, nearest / radius) ** 2;
-        total += recency;
-      });
-      weights[id] = sum / total;
-    }
-    return weights;
+  function weighted(weights, random) {
+    let ticket = draw(random) * weights.reduce((sum, item) => sum + item.weight, 0);
+    for (const item of weights) { if (ticket < item.weight) return item.value; ticket -= item.weight; }
+    return weights.at(-1).value;
   }
 
-  function weightedChoice(items, weight, random) {
-    let total = 0;
-    const weights = items.map(item => { const value = weight(item); total += value; return value; });
-    let draw = random() * total;
-    for (let i = 0; i < items.length; i++) {
-      draw -= weights[i];
-      if (draw <= 0) return items[i];
-    }
-    return items.at(-1);
-  }
-
-  function landmarkPool(grid, candidates, desired, random, freshness) {
-    const points = candidates.map(id => ({ id, ...grid.point(id) }));
-    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
-    for (const point of points) {
-      left = Math.min(left, point.x); right = Math.max(right, point.x);
-      top = Math.min(top, point.y); bottom = Math.max(bottom, point.y);
-    }
-    const width = Math.max(grid.cellSize, right - left), height = Math.max(grid.cellSize, bottom - top);
-    const cols = Math.max(1, Math.min(desired,
-      Math.round(Math.sqrt(desired * width / height) * (0.85 + random() * 0.3))));
-    const rows = Math.ceil(desired / cols);
-    // Shift the internal sector boundaries as well as sampling within them.
-    // A fixed grid otherwise keeps snapping landmarks to the same corridors.
-    const xCuts = Array.from({ length: cols - 1 }, (_, i) => left + (i + 0.75 + random() * 0.5) * width / cols);
-    const yCuts = Array.from({ length: rows - 1 }, (_, i) => top + (i + 0.75 + random() * 0.5) * height / rows);
-    const sector = point => xCuts.filter(cut => point.x >= cut).length +
-      cols * yCuts.filter(cut => point.y >= cut).length;
-    const buckets = Array.from({ length: cols * rows }, () => []);
-    for (const point of points) buckets[sector(point)].push(point);
-    const pool = new Set();
-    for (let s = 0; s < buckets.length; s++) {
-      if (!buckets[s].length) continue;
-      // Sample real safe cells, not just the nearest cell to a sector center.
-      // This lets successive maps use the length of a narrow passage too.
-      for (let sample = 0; sample < 8; sample++) {
-        pool.add(buckets[s][Math.floor(random() * buckets[s].length)].id);
-      }
-    }
-    const roomy = width >= P.Config.NODE_MIN_DISTANCE * 3 && height >= P.Config.NODE_MIN_DISTANCE * 3;
-    const corner = points.reduce((best, point) => point.x + point.y < best.x + best.y ? point : best);
-    const center = { x: left + width * (0.3 + random() * 0.4),
-      y: top + height * (0.3 + random() * 0.4) };
-    const interior = points.filter(point => point.x > left + width * 0.26 && point.x < right - width * 0.26 &&
-      point.y > top + height * 0.26 && point.y < bottom - height * 0.26);
-    const central = interior.length ? weightedChoice(interior, point => 0.08 + freshness[point.id] ** 2, random)
-      : points.reduce((best, point) =>
-        P.Collision.distance(point, center) < P.Collision.distance(best, center) ? point : best);
-    // Retain an interior anchor, but choose its actual position anew. This
-    // preserves interior passages without pinning every map to one center.
-    pool.add(central.id);
-    return { pool: [...pool], sector, initial: roomy ? central.id : corner.id };
-  }
-
-  function selectLandmarks(grid, candidates, desired, random, initial, pool, sector, freshness) {
-    const selected = [], usedSectors = new Set();
-    const minimumSquared = P.Config.NODE_MIN_DISTANCE ** 2;
-    let next = initial;
-    while (next !== undefined && selected.length < desired) {
-      selected.push(next);
-      usedSectors.add(sector(grid.point(next)));
-      if (selected.length === desired) break;
-      const chosenPoints = selected.map(grid.point);
-      function choose(source) {
-        const eligible = [];
-        let bestScore = 0;
-        for (const id of source) {
-          const point = grid.point(id);
-          let separation = Infinity;
-          for (const other of chosenPoints) {
-            separation = Math.min(separation, (point.x - other.x) ** 2 + (point.y - other.y) ** 2);
-          }
-          if (separation < minimumSquared) continue;
-          let score = Math.sqrt(separation);
-          if (!usedSectors.has(sector(point))) score *= 1.55;
-          // History is a soft preference, so cramped pages can reuse cells.
-          score *= 0.18 + 0.82 * freshness[id];
-          // Prefer another side of a real obstacle when distances are similar.
-          // This is bounded to the small stratified pool, not every grid cell.
-          if (source === pool && chosenPoints.some(other =>
-            P.Collision.segmentHits(point, other, grid.obstacleIndex, P.Config.PLAYER_RADIUS + 1))) score *= 1.18;
-          eligible.push({ id, score });
-          bestScore = Math.max(bestScore, score);
-        }
-        // Pick among several strong candidates instead of always taking the
-        // one farthest cell, which repeatedly chooses the same extreme points.
-        const shortlist = eligible.filter(item => item.score >= bestScore * 0.68);
-        return weightedChoice(shortlist, item => (item.score / bestScore) ** 3, random)?.id;
-      }
-      next = choose(pool);
-      // Small pages can use remaining safe grid points rather than failing
-      // merely because two jittered sector targets were too close together.
-      if (next === undefined) next = choose(candidates);
-    }
-    return { selected };
-  }
-
-  function layoutQuality(grid, selected, freshness) {
-    const points = selected.map(grid.point).sort((a, b) => a.x - b.x || a.y - b.y);
-    const cross = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    const hull = [];
-    for (const point of points) {
-      while (hull.length > 1 && cross(hull.at(-2), hull.at(-1), point) <= 0) hull.pop();
-      hull.push(point);
-    }
-    const lowerLength = hull.length;
-    for (let i = points.length - 2; i >= 0; i--) {
-      while (hull.length > lowerLength && cross(hull.at(-2), hull.at(-1), points[i]) <= 0) hull.pop();
-      hull.push(points[i]);
-    }
-    hull.pop();
-    const area = Math.abs(hull.reduce((sum, point, i) => {
-      const next = hull[(i + 1) % hull.length];
-      return sum + point.x * next.y - point.y * next.x;
-    }, 0)) / 2;
-    const coverage = Math.min(1, area / (grid.width * grid.height * 0.5));
-    const novelty = selected.reduce((sum, id) => sum + freshness[id], 0) / selected.length;
-    return coverage + novelty * 1.5;
-  }
-
-  function pathLength(path) {
-    let length = 0;
-    for (let i = 1; i < path.length; i++) length += P.Collision.distance(path[i - 1], path[i]);
-    return length;
-  }
-
-  function connectLandmarks(grid, selected, searches) {
-    const count = selected.length;
-    const paths = Array.from({ length: count }, () => Array(count));
-    const lengths = Array.from({ length: count }, () => new Float64Array(count));
-    let blockedPairs = 0;
-    for (let i = 0; i < count; i++) {
-      paths[i][i] = [grid.point(selected[i])];
-      for (let j = i + 1; j < count; j++) {
-        const direct = [grid.point(selected[i]), grid.point(selected[j])];
-        let path = direct;
-        if (P.Collision.segmentHits(...direct, grid.obstacleIndex, P.Config.PLAYER_RADIUS + 1)) {
-          blockedPairs++;
-          const forward = P.Pathfinding.simplify(
-            P.Pathfinding.trace(searches[i].parents, selected[i], selected[j]).map(grid.point), grid.obstacleIndex);
-          const backward = P.Pathfinding.simplify(
-            P.Pathfinding.trace(searches[j].parents, selected[j], selected[i]).map(grid.point), grid.obstacleIndex).reverse();
-          if (forward.length < 2 || backward.length < 2) {
-            throw new Error('截图地图的通道连接无效，请重新生成关卡。');
-          }
-          path = pathLength(forward) <= pathLength(backward) ? forward : backward;
-        }
-        paths[i][j] = path;
-        paths[j][i] = path.slice().reverse();
-        lengths[i][j] = lengths[j][i] = pathLength(path);
-      }
-    }
-    // A third landmark can provide a shorter feasible detour. Metric closure
-    // keeps the budget from rewarding avoidable backtracking in a grid route.
-    for (let k = 0; k < count; k++) for (let i = 0; i < count; i++) for (let j = 0; j < count; j++) {
-      if (lengths[i][k] + lengths[k][j] + 0.001 < lengths[i][j]) {
-        lengths[i][j] = lengths[i][k] + lengths[k][j];
-        paths[i][j] = paths[i][k].concat(paths[k][j].slice(1));
-      }
-    }
-    return { paths, lengths, blockedSightlineRatio: blockedPairs / (count * (count - 1) / 2) };
-  }
-
-  function challengeMetrics(nodes, path, analysis, blockedSightlineRatio) {
-    let turns = 0;
-    for (let i = 1; i < path.length - 1; i++) {
-      const ax = path[i].x - path[i - 1].x, ay = path[i].y - path[i - 1].y;
-      const bx = path[i + 1].x - path[i].x, by = path[i + 1].y - path[i].y;
-      const scale = Math.hypot(ax, ay) * Math.hypot(bx, by);
-      if (scale && (ax * bx + ay * by) / scale < Math.cos(Math.PI / 6)) turns++;
-    }
-    const xs = nodes.map(node => node.x), ys = nodes.map(node => node.y);
-    const routeExtent = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys)) /
-      (analysis.width * analysis.height);
-    return { turns, blockedSightlineRatio, routeExtent };
-  }
-
-  function generate(analysis, reservedRects = [], random = Math.random, modeId = P.Config.DEFAULT_MODE, recentLayouts = []) {
-    const C = P.Config;
-    const mode = P.getMode(modeId);
-    if (mode.id === 'maze') return P.MazeGenerator.generate(analysis, reservedRects, random);
-    if (!Number.isFinite(analysis.width) || !Number.isFinite(analysis.height) ||
-      analysis.width < 160 || analysis.height < 160) {
-      throw new Error('窗口太小，无法生成路线。请扩大浏览器窗口后重试。');
-    }
-    const isMask = analysis.kind === 'pixel-mask';
-    const grid = isMask ? P.Grid.buildMask(analysis)
-      : P.Grid.build(analysis.width, analysis.height, analysis.rects, reservedRects);
-    const candidateSet = isMask ? new Set(grid.candidateIds) : null;
-    const eligible = id => {
-      const point = grid.point(id);
-      const margin = C.EDGE_MARGIN + C.HIT_RADIUS;
-      return point.x >= margin && point.y >= margin && point.x <= analysis.width - margin &&
-        point.y <= analysis.height - margin && (!isMask || candidateSet.has(id)) &&
-        !P.Collision.pointHits(point, grid.obstacleIndex, C.NODE_CLEARANCE) &&
-        (!isMask || !reservedRects.some(rect => point.x >= rect.x - C.NODE_CLEARANCE &&
-          point.y >= rect.y - C.NODE_CLEARANCE && point.x <= rect.x + rect.width + C.NODE_CLEARANCE &&
-          point.y <= rect.y + rect.height + C.NODE_CLEARANCE));
-    };
-    const candidatePools = [];
-    if (isMask) {
-      for (const component of grid.components) {
-        const available = component.filter(eligible);
-        if (available.length < C.MIN_NODES) continue;
-        const comfortable = available.filter(id => {
-          const point = grid.point(id);
-          return analysis.distanceMap[Math.floor(point.y) * analysis.width + Math.floor(point.x)] >= C.NODE_CLEARANCE;
-        });
-        if (comfortable.length >= C.MIN_NODES) candidatePools.push(comfortable);
-        // Keep each pool confined to one actual component. A large but cramped
-        // room must not prevent trying a smaller component that fits a puzzle.
-        if (comfortable.length < available.length) candidatePools.push(available);
-      }
-      // Clearance is only a placement preference. A genuinely traversable thin
-      // component can still host a puzzle without changing the shared mask.
-    } else {
-      const available = grid.largestComponent.filter(eligible);
-      if (available.length >= C.MIN_NODES) candidatePools.push(available);
-    }
-    if (!candidatePools.length) {
-      throw new Error('这片页面空白不足。请滚动到更宽敞的区域，再生成关卡。');
-    }
-    const baseDifficulty = P.Scoring.difficulty(analysis, grid, C.MIN_NODES);
-    const desired = Math.min(mode.maxNodes, mode.targetNodes + Math.floor(baseDifficulty / 14));
-    const freshness = historyWeights(grid, [...new Set(candidatePools.flat())], recentLayouts);
-    let candidates, best;
-    // Only the winning proposal gets full graph searches and a reference tour.
-    // Three small candidate pools improve variation without tripling pathfinding.
-    for (const pool of candidatePools) {
-      candidates = pool; best = undefined;
-      let bestQuality = -Infinity, sector;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const sample = landmarkPool(grid, candidates, desired, random, freshness);
-        sector = sample.sector;
-        const proposal = selectLandmarks(grid, candidates, desired, random, sample.initial,
-          sample.pool, sample.sector, freshness);
-        const quality = layoutQuality(grid, proposal.selected, freshness);
-        if (!best || proposal.selected.length > best.selected.length ||
-            proposal.selected.length === best.selected.length && quality > bestQuality) {
-          best = proposal; bestQuality = quality;
+  function reachableBeforeFinish(analysis, start, finish) {
+    const { width, height, walkableMask } = analysis;
+    const reached = new Uint8Array(walkableMask.length), radius = P.Config.HIT_RADIUS + 2;
+    const radiusSquared = radius * radius;
+    const open = (x, y) => walkableMask[y * width + x] &&
+      ((x + .5 - finish.x) ** 2 + (y + .5 - finish.y) ** 2 > radiusSquared);
+    const startX = Math.floor(start.x), startY = Math.floor(start.y);
+    if (!open(startX, startY)) return reached;
+    const pending = [startY * width + startX];
+    reached[pending[0]] = 2;
+    // Scanline flood needs one byte per pixel plus pending row runs, avoiding
+    // another full-size integer pixel queue. The finish's trigger disk is a
+    // temporary barrier only; the actual gameplay mask remains untouched.
+    while (pending.length) {
+      const at = pending.pop(), y = Math.floor(at / width), x = at % width;
+      if (reached[at] === 1) continue;
+      let left = x, right = x;
+      while (left && reached[y * width + left - 1] !== 1 && open(left - 1, y)) left--;
+      while (right + 1 < width && reached[y * width + right + 1] !== 1 && open(right + 1, y)) right++;
+      reached.fill(1, y * width + left, y * width + right + 1);
+      for (const row of [y - 1, y + 1]) {
+        if (row < 0 || row >= height) continue;
+        let inRun = false;
+        for (let column = left; column <= right; column++) {
+          const next = row * width + column;
+          if (reached[next] === 1 || !open(column, row)) { inRun = false; continue; }
+          if (!inRun && !reached[next]) { reached[next] = 2; pending.push(next); }
+          inRun = true;
         }
       }
-      // Starting at an extreme can fit four spaced nodes that a central first
-      // choice would exclude on an awkward small component.
-      for (let attempt = 1; best.selected.length < C.MIN_NODES && attempt < C.GENERATION_ATTEMPTS; attempt++) {
-        const corner = candidates.reduce((id, candidate) => {
-          const a = grid.point(id), b = grid.point(candidate);
-          const sx = attempt & 1 ? -1 : 1, sy = attempt & 2 ? -1 : 1;
-          return sx * b.x + sy * b.y < sx * a.x + sy * a.y ? candidate : id;
-        });
-        const proposal = selectLandmarks(grid, candidates, desired, random, corner, candidates, sector, freshness);
-        if (proposal.selected.length > best.selected.length) best = proposal;
-      }
-      if (best.selected.length >= C.MIN_NODES) break;
     }
-    if (best.selected.length < C.MIN_NODES) {
-      throw new Error('没有找到足够宽敞的连续路线。请换一个页面位置，再试一次。');
-    }
-    const searches = best.selected.map(id => P.Pathfinding.breadthFirst(grid, id, random));
-    const connections = connectLandmarks(grid, best.selected, searches);
-    const order = P.Pathfinding.shortestVisitOrder(connections.lengths);
-    if (random() < 0.5) order.reverse();
-    const nodes = order.map((index, id) => ({ id, ...grid.point(best.selected[index]),
-      kind: id === 0 ? 'start' : id === order.length - 1 ? 'finish' : 'checkpoint' }));
-    const referencePath = [];
-    for (let i = 1; i < order.length; i++) {
-      const section = connections.paths[order[i - 1]][order[i]];
-      referencePath.push(...(referencePath.length ? section.slice(1) : section));
-    }
-    if (referencePath.length < 2 || referencePath.some((point, i) => i > 0 &&
-        P.Collision.segmentHits(referencePath[i - 1], point, grid.obstacleIndex))) {
-      throw new Error('参考路线未通过截图碰撞验证，请重新生成关卡。');
-    }
-    const referenceLength = pathLength(referencePath);
-    const challenge = challengeMetrics(nodes, referencePath, analysis, connections.blockedSightlineRatio);
-    const inkMultiplier = P.getInkMultiplier(mode.id, nodes.length);
-    return { nodes, candidates, referencePath, referenceLength, maxInk: referenceLength * inkMultiplier,
-      mode: mode.id, modeLabel: mode.label, inkMultiplier, trailLength: mode.trailLength,
-      difficulty: P.Scoring.difficulty(analysis, grid, nodes.length, challenge), challenge,
-      grid, obstacleIndex: grid.obstacleIndex };
+    return reached;
   }
 
-  P.LevelGenerator = Object.freeze({ generate });
+  function compactMultiplier(level, reachable, reservedRects, random) {
+    const { analysis, nodes } = level, { width, height, walkableMask, distanceMap, componentLabels } = analysis;
+    const rules = P.Config.COLLECTIBLES, start = nodes[0], finish = nodes.at(-1);
+    const label = componentLabels[Math.floor(start.y) * width + Math.floor(start.x)];
+    const threshold = analysis.stats?.walkableThreshold || 0, diagonal = Math.hypot(width, height);
+    // A relocated toolbar replaces its former reservation. In drawing mode it
+    // folds and stops receiving pointer events, so it cannot make a narrow but
+    // playable maze ineligible for its guaranteed multiplier.
+    const reserved = level.toolbarRect ? [level.toolbarRect] : reservedRects;
+    const radii = [...new Set([rules.radius, 6, 4, 2, 1].filter(radius => radius <= rules.radius))];
+    const disks = radii.map(radius => {
+      const border = Math.ceil(radius), offsets = [];
+      for (let y = -border; y <= border; y++) for (let x = -border; x <= border; x++) {
+        if (Math.max(0, Math.abs(x) - .5) ** 2 + Math.max(0, Math.abs(y) - .5) ** 2 <= radius * radius) offsets.push([x, y]);
+      }
+      return offsets;
+    });
+    const fitsReservation = (point, radius) => reserved.every(rect => {
+      const dx = Math.max(rect.x - point.x, 0, point.x - rect.x - rect.width);
+      const dy = Math.max(rect.y - point.y, 0, point.y - rect.y - rect.height);
+      return dx * dx + dy * dy > radius * radius;
+    });
+    let best = null, rank = -Infinity, score = -Infinity, center = null, centerRank = -Infinity, centerScore = -Infinity;
+    for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
+      const at = y * width + x;
+      if (reachable[at] !== 1 || componentLabels[at] !== label) continue;
+      const point = { x: x + .5, y: y + .5 };
+      const endpointDistance = Math.sqrt(Math.min(squareDistance(point, start), squareDistance(point, finish)));
+      if (endpointDistance <= P.Config.HIT_RADIUS + 2) continue;
+      const candidateScore = endpointDistance / diagonal + draw(random) * .1;
+      const pointRank = Number(fitsReservation(point, 1));
+      if (pointRank > centerRank || pointRank === centerRank && candidateScore > centerScore) {
+        center = { ...point, radius: 1 }; centerRank = pointRank; centerScore = candidateScore;
+      }
+      for (let i = 0; i < radii.length; i++) {
+        const radius = radii[i], margin = P.Config.HIT_RADIUS + radius + 2;
+        if (endpointDistance < margin || distanceMap[at] < radius + threshold + Math.SQRT1_2 ||
+            point.x - radius < 0 || point.y - radius < 0 || point.x + radius > width || point.y + radius > height) continue;
+        const candidateRank = (fitsReservation(point, radius) ? 100 : 0) + radius;
+        if (candidateRank < rank || candidateRank === rank && candidateScore <= score) continue;
+        if (!disks[i].every(([dx, dy]) => walkableMask[(y + dy) * width + x + dx] &&
+            componentLabels[(y + dy) * width + x + dx] === label)) continue;
+        best = { ...point, radius }; rank = candidateRank; score = candidateScore;
+      }
+    }
+    // A subpixel passage can have a legal player center without accommodating
+    // a whole visible disk. Keep the smallest glyph at that reachable center;
+    // pickup still checks the gameplay mask and line of sight to the center.
+    if (!best && !center) throw new Error('迷宫没有可放置倍率泡泡的通道');
+    return best || center;
+  }
+
+  function placeCollectibles(level, reservedRects, random) {
+    const rules = P.Config.COLLECTIBLES;
+    const count = Math.min(rules.maxXpCount, 3 + level.stars + Math.floor(draw(random) * 3));
+    const multiplier = weighted(rules.multiplierWeights, random), rewards = [];
+    // Every map receives one multiplier. Roll it before geometry sampling so a
+    // scarce placement cannot change rarity, and give it first choice of space.
+    rewards.push({ id: 'multiplier-0', kind: 'multiplier', value: multiplier });
+    for (let i = 0; i < count; i++) rewards.push({ id: 'xp-' + i, kind: 'xp', value: weighted(rules.xpWeights, random) });
+
+    const { analysis, nodes } = level, { width, height, walkableMask, distanceMap, componentLabels } = analysis;
+    const start = nodes[0], label = componentLabels[Math.floor(start.y) * width + Math.floor(start.x)];
+    if (!label) throw new Error('迷宫起点不在可通行区域');
+    const reachable = reachableBeforeFinish(analysis, start, nodes.at(-1));
+    const radius = rules.radius, border = Math.ceil(radius), threshold = analysis.stats?.walkableThreshold || 0;
+    const reserved = [...reservedRects, ...(level.toolbarRect ? [level.toolbarRect] : [])];
+    const buckets = Array.from({ length: 24 }, () => ({ count: 0, points: [] }));
+    const fitsReservation = (x, y) => reserved.every(rect => {
+      const dx = Math.max(rect.x - x, 0, x - rect.x - rect.width);
+      const dy = Math.max(rect.y - y, 0, y - rect.y - rect.height);
+      return dx * dx + dy * dy > radius * radius;
+    });
+    // Reservoir sampling keeps bounded memory while retaining candidates from
+    // each part of the page. A staggered 3px sampling lattice avoids a full-image
+    // random draw per pixel while retaining narrow 20px+ bubble-sized passages.
+    const sampleStep = 3;
+    for (let y = border; y < height - border; y += sampleStep) for (let x = border + Math.floor((y - border) / sampleStep) % sampleStep;
+      x < width - border; x += sampleStep) {
+      const at = y * width + x;
+      if (reachable[at] !== 1 || componentLabels[at] !== label || distanceMap[at] < radius + threshold + Math.SQRT1_2) continue;
+      const p = { x: x + .5, y: y + .5 };
+      if (nodes.some(node => squareDistance(p, node) < rules.endpointMargin ** 2) || !fitsReservation(p.x, p.y)) continue;
+      const bucket = buckets[Math.min(3, Math.floor(y * 4 / height)) * 6 + Math.min(5, Math.floor(x * 6 / width))];
+      const slot = Math.floor(draw(random) * ++bucket.count);
+      if (bucket.points.length < 64) bucket.points.push(p);
+      else if (slot < 64) bucket.points[slot] = p;
+    }
+    const offsets = [];
+    for (let y = -border; y <= border; y++) for (let x = -border; x <= border; x++) {
+      // Test every closed pixel square touched by the visible circle, not just
+      // its center or four cardinal points. The whole bubble stays on the same
+      // walkable mask used by collision and never straddles a thin wall.
+      if (Math.max(0, Math.abs(x) - .5) ** 2 + Math.max(0, Math.abs(y) - .5) ** 2 <= radius * radius) offsets.push([x, y]);
+    }
+    const candidates = buckets.flatMap(bucket => bucket.points).filter(p => {
+      const x = Math.floor(p.x), y = Math.floor(p.y);
+      return offsets.every(([dx, dy]) => walkableMask[(y + dy) * width + x + dx] && componentLabels[(y + dy) * width + x + dx] === label);
+    });
+    const result = [], diagonal = Math.hypot(width, height), spacingSquared = rules.minSpacing ** 2;
+    for (const reward of rewards) {
+      let best = -1, bestScore = -Infinity;
+      for (let i = 0; i < candidates.length; i++) {
+        const p = candidates[i];
+        const nearest = result.length ? Math.min(...result.map(other => squareDistance(p, other))) : Infinity;
+        if (nearest < spacingSquared) continue;
+        const score = (result.length ? Math.sqrt(nearest) / diagonal : 0) + draw(random) * .35;
+        if (score > bestScore) { bestScore = score; best = i; }
+      }
+      if (best < 0) {
+        if (reward.kind !== 'multiplier') break;
+        result.push({ ...reward, ...compactMultiplier(level, reachable, reservedRects, random) });
+        continue;
+      }
+      const [point] = candidates.splice(best, 1);
+      result.push({ ...reward, ...point, radius });
+    }
+    return result;
+  }
+
+  // Rewards read the final maze only. They never alter its original content,
+  // generated walls, collision mask, route, difficulty or connected regions.
+  P.LevelGenerator = Object.freeze({
+    generate(analysis, reservedRects = [], random = Math.random, history = []) {
+      const level = P.MazeGenerator.generate(analysis, reservedRects, random, history);
+      return { ...level, collectibles: placeCollectibles(level, reservedRects, random) };
+    }
+  });
 })();

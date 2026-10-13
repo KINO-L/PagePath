@@ -1,189 +1,62 @@
 'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
 const test = require('node:test');
-
+const assert = require('node:assert/strict');
+const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
 const context = vm.createContext({});
-for (const name of ['config', 'collision', 'grid', 'pathfinding', 'scoring', 'levelGenerator']) {
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/content', `${name}.js`), 'utf8'), context);
-}
+for (const file of ['config','collision','mazeCleanup','mazeRoute','mazeConnectors','mazeGenerator','routeMazeGenerator','levelGenerator'])
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/content', file + '.js'), 'utf8'), context);
 const P = context.__PAGEPATH__;
-const rect = (x, y, width, height) => ({ x, y, width, height });
-const reserved = [rect(254, 6, 692, 91)];
-const pages = {
-  spacious: { width: 1200, height: 760, rects: [] },
-  cards: { width: 1200, height: 760, rects: Array.from({ length: 6 }, (_, i) =>
-    rect(100 + i % 3 * 350, 110 + Math.floor(i / 3) * 285, 270, 210)) },
-  article: { width: 1200, height: 760, rects: [
-    rect(40, 150, 160, 510), rect(300, 150, 660, 52), rect(300, 242, 580, 70),
-    rect(300, 350, 660, 84), rect(300, 478, 610, 84), rect(300, 608, 660, 64),
-  ] },
-};
-const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-
-function random(seed) {
-  return () => {
-    seed |= 0;
-    seed = seed + 0x6D2B79F5 | 0;
-    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-
-// Every new point is compared with its closest OLD position, never its old
-// index. Reversing a route or exchanging start/finish therefore scores zero.
-function placementDifference(current, previous) {
-  const nearest = current.map(point => Math.min(...previous.map(other => distance(point, other))));
-  return {
-    mean: nearest.reduce((sum, value) => sum + value, 0) / nearest.length,
-    moved48: nearest.filter(value => value >= 48).length / nearest.length,
-    moved64: nearest.filter(value => value >= 64).length / nearest.length,
-  };
-}
-
-function remember(history, level) {
-  const points = Object.freeze(level.nodes.map(({ x, y }) => Object.freeze({ x, y })));
-  return Object.freeze([...history, points].slice(-4));
-}
-
-function generate(analysis, exclusions, rng, mode, history) {
-  const before = JSON.stringify(history);
-  const level = P.LevelGenerator.generate(analysis, exclusions, rng, mode, history);
-  assert.equal(JSON.stringify(history), before, 'generation must not edit its caller-owned history');
-  return level;
-}
-
-function verifyPlayable(level, analysis, exclusions, mode) {
-  const expectedInk = P.getInkMultiplier(mode, level.nodes.length);
-  const index = P.Collision.createIndex([...analysis.rects, ...exclusions]);
-  assert.equal(level.mode, mode);
-  assert.ok(level.nodes.length >= P.Config.MIN_NODES && level.nodes.length <= P.getMode(mode).maxNodes);
-  assert.equal(level.inkMultiplier, expectedInk);
-  assert.ok(Math.abs(level.maxInk / level.referenceLength - expectedInk) < 1e-10);
-  let length = 0;
-  for (let i = 1; i < level.referencePath.length; i++) {
-    const start = level.referencePath[i - 1], end = level.referencePath[i];
-    assert.equal(P.Collision.segmentHits(start, end, index, P.Config.PLAYER_RADIUS), false,
-      'varying placements must preserve every obstacle and toolbar exclusion');
-    length += distance(start, end);
+function rng(seed) { return () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function fixture(kind = 'blank', width = 640, height = 480) {
+  const mask = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    mask[y * width + x] = kind === 'solid' ? 1 : kind === 'cards' ? Number(x % 158 < 120 && y % 116 < 84)
+      : kind === 'noise' ? Number(x % 37 < 22 && y % 19 < 12) : 0;
   }
-  for (let i = 0; i < level.nodes.length; i++) {
-    const node = level.nodes[i];
-    assert.equal(P.Collision.pointHits(node, index, P.Config.NODE_CLEARANCE), false);
-    assert.ok(level.referencePath.some(point => point.x === node.x && point.y === node.y),
-      'the budget reference must really pass through every relocated target');
-    for (const other of level.nodes.slice(i + 1)) {
-      assert.ok(distance(node, other) >= P.Config.NODE_MIN_DISTANCE, 'targets cannot overlap to obtain variety');
-    }
+  return P.MazeGeometry.rebuild({ width, height, obstacleMask: mask, stats: {} }, [], mask);
+}
+function verify(level, source) {
+  assert.equal(level.nodes.length, 2); assert.equal(level.nodes[0].kind, 'start'); assert.equal(level.nodes[1].kind, 'finish');
+  assert.equal(level.unlimitedInk, true); assert.equal(level.maxInk, Infinity);
+  assert.equal(level.obstacleIndex.walkableMask, level.analysis.walkableMask);
+  assert.ok(Number.isInteger(level.difficulty) && level.difficulty >= 0 && level.difficulty <= 100);
+  assert.equal(level.stars, P.Difficulty.stars(level.difficulty));
+  assert.equal(level.mode, undefined); assert.equal(level.modeLabel, undefined);
+  let measured = 0;
+  for (let i = 0; i < level.referencePath.length; i++) {
+    const p = level.referencePath[i]; assert.equal(P.Collision.pointHits(p, level.obstacleIndex), false);
+    if (i) { const a = level.referencePath[i - 1]; assert.equal(P.Collision.segmentHits(a, p, level.obstacleIndex), false); measured += Math.hypot(a.x-p.x,a.y-p.y); }
   }
-  assert.ok(Math.abs(length - level.referenceLength) < 0.001);
-  assert.equal(distance(level.referencePath[0], level.nodes[0]), 0);
-  assert.equal(distance(level.referencePath.at(-1), level.nodes.at(-1)), 0);
-  assert.ok(level.maxInk > length);
+  assert.ok(Math.abs(measured - level.referenceLength) < 1e-5);
+  const [a,b] = level.nodes;
+  assert.ok(Math.hypot(a.x-b.x,a.y-b.y) > Math.hypot(source.width,source.height)*.3, 'endpoints span the page');
+  assert.ok(measured > Math.hypot(source.width,source.height)*.65, 'a short pocket is not a maze');
+  for (const p of level.nodes) assert.ok(level.analysis.distanceMap[Math.floor(p.y)*source.width+Math.floor(p.x)] >= 12, 'both endpoint icons fit');
+  // Independently remove every reported route portal from the graph. Each one
+  // must disconnect S/T; a cycle or shortcut on the answer fails this audit.
+  const adjacency=level.maze.vertices.map(()=>[]);
+  level.maze.edges.forEach((e,i)=>{adjacency[e.a].push([e.b,i]);adjacency[e.b].push([e.a,i]);});
+  const ids=level.maze.routeVertexIds, start=ids[0], finish=ids.at(-1);
+  for(const removed of level.maze.routeEdgeIds) {
+    const seen=new Set([start]),queue=[start];
+    for(let i=0;i<queue.length;i++)for(const [next,edge]of adjacency[queue[i]])if(edge!==removed&&!seen.has(next)){seen.add(next);queue.push(next);}
+    assert.ok(!seen.has(finish),'all S/T route portals are bridges');
+  }
 }
 
-test('placement comparison rejects reordered copies and small coordinate jitter', () => {
-  const points = [{ x: 40, y: 40 }, { x: 240, y: 40 }, { x: 240, y: 240 }, { x: 40, y: 240 }];
-  assert.deepEqual(placementDifference([...points].reverse(), points), { mean: 0, moved48: 0, moved64: 0 });
-  assert.equal(placementDifference(points.map(point => ({ x: point.x + 8, y: point.y })), points).moved48, 0);
-  assert.equal(placementDifference(points.map(point => ({ x: point.x + 64, y: point.y })), points).moved64, 1);
+test('seeded maps reproduce geometry without mutating earlier cached masks',()=>{
+  const source=fixture('solid'),first=P.LevelGenerator.generate(source,[],rng(19)),before=first.analysis.obstacleMask.slice();
+  const again=P.LevelGenerator.generate(source,[],rng(19));
+  assert.deepEqual(again.referencePath,first.referencePath);assert.equal(again.difficulty,first.difficulty);assert.deepEqual(again.analysis.obstacleMask,first.analysis.obstacleMask);
+  const next=P.LevelGenerator.generate(source,[],rng(25),[first.nodes]);verify(next,source);
+  assert.deepEqual(first.analysis.obstacleMask,before);assert.notEqual(next.analysis.obstacleMask,first.analysis.obstacleMask);
 });
-
-for (const [name, analysis] of Object.entries(pages)) for (const mode of ['normal', 'hell', 'immortal']) {
-  test(`${name} ${mode}: successive maps relocate most targets instead of reordering the same layout`, () => {
-    for (const seed of [92142, 81083]) {
-      const rng = random(seed);
-      let history = Object.freeze([]);
-      const differences = [];
-      for (let map = 0; map < 8; map++) {
-        const level = generate(analysis, reserved, rng, mode, history);
-        verifyPlayable(level, analysis, reserved, mode);
-        if (history.length) {
-          const delta = placementDifference(level.nodes, history.at(-1));
-          const detail = `${name} ${mode} seed ${seed} map ${map}: ${JSON.stringify(delta)}`;
-          assert.ok(delta.moved48 > 0.5, `most nodes must move at least three grid cells; ${detail}`);
-          assert.ok(delta.mean >= 60, `average visual relocation must be meaningful; ${detail}`);
-          differences.push(delta);
-          for (const previous of history) {
-            assert.ok(placementDifference(level.nodes, previous).mean >= 24,
-              'the next four maps should not cycle back to a recently used placement');
-          }
-        }
-        history = remember(history, level);
-      }
-      const averageMoved64 = differences.reduce((sum, value) => sum + value.moved64, 0) / differences.length;
-      assert.ok(averageMoved64 >= 0.6,
-        `most nodes should move a full node-spacing across the sequence; ${name} ${mode} ${seed}: ${averageMoved64}`);
-    }
-  });
-}
-
-test('the recent four maps avoid repetition even when the random seed repeats', () => {
-  for (const analysis of Object.values(pages)) for (const mode of ['normal', 'hell', 'immortal']) {
-    let history = Object.freeze([]);
-    for (let map = 0; map < 6; map++) {
-      const level = generate(analysis, reserved, random(842), mode, history);
-      verifyPlayable(level, analysis, reserved, mode);
-      if (history.length) {
-        const delta = placementDifference(level.nodes, history.at(-1));
-        assert.ok(delta.moved48 > 0.5, `history must prevent same-seed lookalikes: ${mode} ${JSON.stringify(delta)}`);
-        for (const previous of history) {
-          assert.ok(placementDifference(level.nodes, previous).mean >= 24,
-            'history must also reject layouts from two, three, and four maps ago');
-        }
-      }
-      history = remember(history, level);
-    }
+test('successive maps change actual endpoints, bends and difficulty',()=>{
+  const source=fixture(),history=[],signatures=new Set(),scores=new Set();
+  for(const seed of [4,17,36,65,99]){
+    const level=P.LevelGenerator.generate(source,[],rng(seed),history);verify(level,source);
+    signatures.add(level.referencePath.map(p=>Math.round(p.x)+','+Math.round(p.y)).join('/'));scores.add(level.difficulty);history.push(level.nodes);
   }
-});
-
-test('identical seed and immutable history reproduce nodes, reference route, and ink exactly', () => {
-  for (const mode of ['normal', 'hell', 'immortal']) {
-    let history = Object.freeze([]);
-    const rng = random(12345);
-    for (let map = 0; map < 4; map++) {
-      history = remember(history, generate(pages.cards, reserved, rng, mode, history));
-    }
-    const first = generate(pages.cards, reserved, random(9876), mode, history);
-    const second = generate(pages.cards, reserved, random(9876), mode, history);
-    assert.deepEqual(first.nodes, second.nodes);
-    assert.deepEqual(first.referencePath, second.referencePath);
-    assert.equal(first.referenceLength, second.referenceLength);
-    assert.equal(first.maxInk, second.maxInk);
-    verifyPlayable(first, pages.cards, reserved, mode);
-  }
-});
-
-test('history never sacrifices a safe fallback on tiny pages or narrow corridors', () => {
-  const constrained = [
-    { width: 180, height: 180, rects: [] },
-    { width: 800, height: 760, rects: [rect(0, 0, 360, 760), rect(440, 0, 360, 760)] },
-  ];
-  for (const analysis of constrained) for (const mode of ['normal', 'hell', 'immortal']) {
-    let history = Object.freeze([]);
-    for (let map = 0; map < 6; map++) {
-      const level = generate(analysis, [], random(407 + map), mode, history);
-      verifyPlayable(level, analysis, [], mode);
-      history = remember(history, level);
-    }
-  }
-});
-
-test('recent-layout avoidance includes the last four targets of a twenty-node map', () => {
-  const analysis = pages.spacious;
-  // A full-sized previous layout: all twenty points fit with real target
-  // spacing, even if this new page's density asks for only eighteen targets.
-  const previous = { nodes: Array.from({ length: 20 }, (_, i) => ({
-    x: 120 + i % 5 * 220, y: 160 + Math.floor(i / 5) * 160,
-  })) };
-  const complete = remember([], previous);
-  const truncated = Object.freeze([Object.freeze(complete[0].slice(0, 16))]);
-  const fullHistoryMap = generate(analysis, reserved, random(842), 'immortal', complete);
-  const oldLimitMap = generate(analysis, reserved, random(842), 'immortal', truncated);
-  verifyPlayable(fullHistoryMap, analysis, reserved, 'immortal');
-  assert.notDeepEqual(fullHistoryMap.nodes, oldLimitMap.nodes,
-    'the final four previous positions must influence the next placement instead of being discarded');
+  assert.equal(signatures.size,5);assert.ok(scores.size>=2);
 });

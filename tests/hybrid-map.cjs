@@ -10,7 +10,6 @@ const candidate = process.env.PAGEPATH_BROWSER || process.env.CHROME_PATH ||
   (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : undefined);
 const executablePath = candidate && fs.existsSync(candidate) ? candidate : undefined;
 const root = path.resolve(__dirname, '..');
-const resultPath = path.join(root, 'test-results');
 const bounds = { width: 1080, height: 760 };
 const fixture = `<!doctype html><style>
   * { box-sizing: border-box; } body { margin: 0; background: white; font: 20px/28px Arial; }
@@ -45,7 +44,6 @@ const fixture = `<!doctype html><style>
 
 (async () => {
   const browser = await playwright.chromium.launch({ headless: true, executablePath });
-  fs.mkdirSync(resultPath, { recursive: true });
   try {
     const results = [];
     for (const dpr of [1, 2]) {
@@ -56,12 +54,13 @@ const fixture = `<!doctype html><style>
       await page.evaluate(() => document.fonts.ready);
       for (const file of ['vendor/opencv/opencv.js', ...[
         'config', 'compactDom', 'compactMask', 'opencvRuntime', 'imageMapAnalyzer',
-        'collision', 'grid', 'pathfinding', 'scoring', 'levelGenerator'
+        'collision', 'mazeCleanup', 'mazeRoute', 'mazeConnectors',
+        'mazeGenerator', 'routeMazeGenerator', 'levelGenerator'
       ].map(name => 'src/content/' + name + '.js')]) {
         await page.addScriptTag({ path: path.join(root, file) });
       }
       await page.evaluate(bounds => { window.beforeHints = __PAGEPATH__.CompactDOM.collect(bounds); }, bounds);
-      const screenshot = await page.screenshot({ path: path.join(resultPath, `pagepath-hybrid-source-dpr${dpr}.png`) });
+      const screenshot = await page.screenshot();
       // Simulate content moving during capture. Only hints stable across both
       // observations may assist the frozen screenshot's map.
       await page.evaluate(bounds => {
@@ -77,7 +76,6 @@ const fixture = `<!doctype html><style>
         const pixels = ctx.getImageData(0, 0, bounds.width, bounds.height);
         window.imageMap = await P.ImageMapAnalyzer.analyze(pixels);
         window.hybridMap = await P.ImageMapAnalyzer.analyze(pixels, { domHints });
-        window.sourceImage = image;
         const at = (map, x, y, name = 'obstacleMask') => map[name][y * map.width + x];
         const added = (x, y, width, height) => {
           let count = 0;
@@ -100,25 +98,31 @@ const fixture = `<!doctype html><style>
           return () => { seed = Math.imul(seed, 1664525) + 1013904223 | 0; return (seed >>> 0) / 4294967296; };
         };
         const levels = [];
-        for (const mode of ['normal', 'hell', 'immortal']) {
-          const level = P.LevelGenerator.generate(hybridMap, [], random(73), mode);
+        for (const seed of [73, 912]) {
+          const level = P.LevelGenerator.generate(hybridMap, [], random(seed));
+          const finalMap = level.analysis, finalIndex = level.obstacleIndex;
           const collected = new Set([level.nodes[0].id]);
           let collisions = 0, length = 0;
           for (let i = 1; i < level.referencePath.length; i++) {
             const a = level.referencePath[i - 1], b = level.referencePath[i];
-            if (P.Collision.segmentHits(a, b, index)) collisions++;
+            if (P.Collision.segmentHits(a, b, finalIndex)) collisions++;
             length += P.Collision.distance(a, b);
             for (const node of level.nodes) {
               if (P.Collision.segmentCircleEntry(a, b, node, P.Config.HIT_RADIUS) !== null) collected.add(node.id);
             }
           }
           const labels = new Set(level.nodes.map(node =>
-            hybridMap.componentLabels[Math.floor(node.y) * hybridMap.width + Math.floor(node.x)]));
-          levels.push({ mode, nodes: level.nodes.length, collected: collected.size, collisions,
-            collisionMapShared: level.obstacleIndex.walkableMask === hybridMap.walkableMask,
-            blockedNodes: level.nodes.filter(node => P.Collision.pointHits(node, index)).length,
+            finalMap.componentLabels[Math.floor(node.y) * finalMap.width + Math.floor(node.x)]));
+          levels.push({ seed, nodes: level.nodes.length, collected: collected.size, collisions,
+            collisionMapShared: finalIndex.walkableMask === finalMap.walkableMask,
+            screenshotShared: level.mazeOriginalAnalysis === hybridMap,
+            uniqueRoute: P.RouteMazeGenerator.topology(finalMap, ...level.nodes).unique,
+            finalMaskConsistent: finalMap.walkableMask.every((value, at) => value === Number(finalMap.distanceMap[at] > finalMap.stats.walkableThreshold)),
+            difficulty: level.difficulty, stars: level.stars,
+            unlimitedInk: level.unlimitedInk,
+            blockedNodes: level.nodes.filter(node => P.Collision.pointHits(node, finalIndex)).length,
             connected: labels.size === 1 && !labels.has(0), length,
-            referenceLength: level.referenceLength, maxInk: level.maxInk });
+            referenceLength: level.referenceLength });
         }
         return { beforeHints, afterHints, domHints, stats: hybridMap.stats, levels,
           maskDisagreement, removedForeground,
@@ -176,29 +180,18 @@ const fixture = `<!doctype html><style>
       assert.equal(summary.crossingGraphicWhitespace, false);
       for (const level of summary.levels) {
         assert.equal(level.collisionMapShared, true);
+        assert.equal(level.screenshotShared, true);
+        assert.equal(level.uniqueRoute, true);
+        assert.equal(level.finalMaskConsistent, true);
+        assert.equal(level.nodes, 2);
+        assert.equal(level.unlimitedInk, true);
+        assert.ok(level.difficulty >= 0 && level.difficulty <= 100);
+        assert.equal(level.stars, Math.max(1, Math.ceil(level.difficulty / 20)));
         assert.equal(level.collisions, 0);
         assert.equal(level.blockedNodes, 0);
         assert.equal(level.connected, true);
         assert.equal(level.collected, level.nodes);
-        assert.ok(level.length <= level.maxInk);
         assert.ok(Math.abs(level.length - level.referenceLength) < 1e-8);
-      }
-      const diagnostics = await page.evaluate(() => {
-        const canvas = document.createElement('canvas'); canvas.width = hybridMap.width; canvas.height = hybridMap.height;
-        const ctx = canvas.getContext('2d');
-        const render = map => {
-          ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
-          ctx.strokeStyle = 'rgba(230,35,35,.85)'; ctx.lineWidth = 1; ctx.beginPath();
-          for (let i = 0; i < map.contours.segments.length; i += 4) {
-            const s = map.contours.segments;
-            ctx.moveTo(s[i], s[i + 1]); ctx.lineTo(s[i + 2], s[i + 3]);
-          }
-          ctx.stroke(); return canvas.toDataURL('image/png');
-        };
-        return { image: render(imageMap), hybrid: render(hybridMap) };
-      });
-      for (const [kind, dataUrl] of Object.entries(diagnostics)) {
-        fs.writeFileSync(path.join(resultPath, `pagepath-hybrid-${kind}-dpr${dpr}.png`), Buffer.from(dataUrl.split(',')[1], 'base64'));
       }
       assert.deepEqual(errors, []);
       results.push({ dpr, hints: summary.domHints.length, stats: summary.stats, levels: summary.levels });

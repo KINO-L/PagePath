@@ -7,28 +7,19 @@
   // Kept here so a programmatically injected content script can style its shadow
   // root synchronously, without fetches, host permissions, or exposed resources.
   P.OVERLAY_CSS = `
-    :host { color-scheme: light; }
-    *, *::before, *::after { box-sizing: border-box; }
+    :host { color-scheme:light; }
+    *,*::before,*::after { box-sizing:border-box; }
     .snapshot-layer { position:absolute;inset:0;display:block;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;object-fit:fill;pointer-events:none;user-select:none; }
     .surface { position:absolute;inset:0;display:block;width:100%;height:100%;overflow:hidden;pointer-events:auto;touch-action:none;cursor:default;user-select:none;-webkit-user-select:none; }
     .surface[data-state="DRAWING"] { cursor:none; }
     .surface[data-generation-failed="true"] { cursor:default; }
     .visual-layer { pointer-events:none; }
-    .obstacle-warning,.obstacle-map,.obstacle-flash { fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke; }
-    .hint-route,.hint-outline,.path,.path-outline { fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke; }
-    .hint-route { stroke:#ad654a;stroke-width:1.4;stroke-dasharray:4 7;opacity:.78; }
-    .hint-outline { stroke:rgba(255,253,247,.8);stroke-width:4; }
-    .hint-arrow { fill:none;stroke:#a86046;stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round; }
-    .hint-step { fill:#99543e;font:600 9px ui-monospace,Consolas,monospace;paint-order:stroke;stroke:rgba(255,253,247,.96);stroke-width:3;stroke-linejoin:round; }
+    .obstacle-warning,.obstacle-flash { fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke; }
     .path,.path-outline { display:none; }
     .ink-stroke { color:#595247; }
     .ink-stroke-piece { fill:currentColor;stroke:rgba(255,253,247,.45);stroke-width:.35;stroke-linejoin:round; }
     .ink-bristle { fill:none;stroke:#faf6ea;stroke-width:.35;stroke-linecap:round;opacity:.5; }
     .surface[data-state="FAILED"] .ink-stroke { color:#a66f58; }
-    .node { color:#74766a; }
-    .node .ink-halo { fill:#faf8f1;opacity:.9; }
-    .node .ink-drop { fill:currentColor;stroke:#faf8f1;stroke-width:1; }
-    .node .ink-grain { fill:#838779;opacity:.3; }
     .node .stone-body { fill:#76796d;stroke:#fffdf6;stroke-width:1.3; }
     .node .stone-well { fill:#555b50;stroke:#989c8f;stroke-width:.7; }
     .node .stone-shine { fill:none;stroke:#c8cbb9;stroke-width:.9;stroke-linecap:round;opacity:.75; }
@@ -37,71 +28,77 @@
     .node .paper-line { fill:none;stroke:#c5beaa;stroke-width:.8;stroke-linecap:round; }
     .node .collected-mark { opacity:0;fill:#b1644c; }
     .node[data-collected="true"] .collected-mark { opacity:1; }
-    .node[data-collected="true"] .ink-drop { fill:#f5eee1;stroke:#a87358;stroke-width:1.15; }
-    .node[data-collected="true"] .ink-grain { opacity:0; }
     .node[data-collected="true"] .stone-well { fill:#8b8979; }
     .node[data-collected="true"] .paper-line { stroke:#bfa786; }
+    .collectible { pointer-events:none;opacity:0; }
+    .collectible[data-collected="true"] { display:none; }
+    .bubble-body { fill:#fff9e8;stroke:#b89758;stroke-width:1; }
+    .bubble-wash { fill:#d9b974;opacity:.16; }
+    .bubble-ink { fill:none;stroke:#9d783e;stroke-width:.65;stroke-linecap:round;opacity:.65; }
+    .bubble-shine { fill:none;stroke:#fffef5;stroke-width:1;stroke-linecap:round; }
+    .bubble-label { fill:#896532;font:600 8px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;text-anchor:middle;dominant-baseline:central;letter-spacing:-.35px; }
+    .collectible[data-kind="multiplier"] .bubble-body { fill:#eef8f0;stroke:#76a394; }
+    .collectible[data-kind="multiplier"] .bubble-wash { fill:#88b7a3; }
+    .collectible[data-kind="multiplier"] .bubble-ink { stroke:#638c7b; }
+    .collectible[data-kind="multiplier"] .bubble-label { fill:#4e8270;font-size:9px; }
+    .bubble-glow { opacity:.32;transform-box:fill-box;transform-origin:center; }
+    .collectible[data-kind="multiplier"] .bubble-glow { animation:bubble-breathe 2.8s ease-in-out infinite; }
+    .collectible[data-rare="true"] .bubble-body { stroke:#ad995b;stroke-width:1.2; }
+    .collectible[data-rare="true"] .bubble-label { fill:#7b763f; }
+    .collectible-pickup { pointer-events:none; }
+    .pickup-ring { fill:none;stroke:#b79a5f;stroke-width:.8;opacity:.6; }
+    .pickup-label { fill:#91723d;stroke:#fffbed;stroke-width:2.5;paint-order:stroke;font:600 10px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;text-anchor:middle; }
+    .collectible-pickup[data-kind="multiplier"] .pickup-label { fill:#548673; }
+    @keyframes bubble-breathe { 0%,100% { opacity:.36;transform:scale(.92); } 50% { opacity:.85;transform:scale(1.12); } }
     .brush-cursor { position:absolute;left:0;top:0;width:24px;height:36px;z-index:1;overflow:visible;pointer-events:none;display:none;filter:drop-shadow(.5px 1px .6px rgba(29,29,22,.15)); }
-    .cursor-ink { position:absolute;left:0;top:0;z-index:1;display:none;pointer-events:none;color:#655f52;background:rgba(250,247,238,.88);border-radius:3px;padding:0 2px;font:10px/14px ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;white-space:nowrap; }
-    .cursor-ink[data-low="true"] { color:#a35d44; }
-    .cursor-ink[data-unlimited="true"] { font-size:13px; }
-    .brush-cursor[data-visible="true"],.cursor-ink[data-visible="true"] { display:block; }
-    .toolbar { position:absolute;top:12px;left:50%;transform:translateX(-50%);width:min(372px,calc(100% - 20px));height:48px;z-index:2;padding:8px 7px;overflow:hidden;pointer-events:auto;border:1px solid rgba(63,59,46,.17);border-radius:17px;background:rgba(249,246,236,.97);color:#4d4b40;box-shadow:0 3px 14px rgba(43,39,25,.09),inset 0 1px 0 rgba(255,255,250,.9);font:11px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;user-select:none;touch-action:none;cursor:grab; }
-    .toolbar[data-dragging="true"],.toolbar[data-dragging="true"] .drag-handle { cursor:grabbing; }
-    .toolbar-main { display:flex;align-items:center;gap:4px;height:30px; }
-    /* Keep the saved drag position and node reservation fixed while the visual
-       controls fold away. The entire old footprint lets the brush pass through. */
-    .toolbar[data-state="DRAWING"] { background:transparent;border-color:transparent;box-shadow:none;pointer-events:none;cursor:none; }
-    .toolbar[data-state="DRAWING"] .toolbar-main { visibility:hidden; }
-    .toolbar[data-state="DRAWING"]::after { content:"";position:absolute;left:calc(50% - 14px);top:calc(50% - 3px);width:28px;height:6px;border-radius:3px;background:rgba(155,144,119,.55);pointer-events:none; }
-    .status { width:20px;height:28px;flex:none;display:grid;place-items:center;color:#777264;outline-offset:0; }
-    .status-icon { width:16px;height:16px; }
-    .toolbar[data-state="SUCCESS"] .status { color:#91754d; }
+    .brush-cursor[data-visible="true"] { display:block; }
+    .toolbar { position:absolute;top:12px;left:50%;transform:translateX(-50%);width:min(342px,calc(100% - 20px));height:76px;z-index:2;padding:7px 10px;overflow:hidden;pointer-events:auto;border:1px solid rgba(63,59,46,.17);border-radius:16px;background:rgba(249,246,236,.97);color:#4d4b40;box-shadow:0 3px 14px rgba(43,39,25,.09),inset 0 1px 0 rgba(255,255,250,.9);font:11px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;user-select:none;touch-action:none;cursor:default; }
+    .toolbar[data-dragging="true"],.toolbar[data-dragging="true"] * { cursor:move; }
+    .toolbar-main { display:flex;align-items:center;gap:5px;height:30px; }
+    .toolbar-meta { display:flex;align-items:center;gap:12px;height:28px;margin-top:2px;padding-left:3px; }
+    .status { width:18px;height:28px;flex:none;display:grid;place-items:center;color:#777264;outline-offset:0; }
+    .status-icon { width:15px;height:15px; }
+    .toolbar[data-state="SUCCESS"] .status { color:#59764d; }
     .toolbar[data-state="FAILED"] .status,.toolbar[data-state="PAUSED"] .status { color:#ad654b; }
-    .metrics { display:flex;align-items:center;flex:1;min-width:43px; }
-    .metric { display:flex;align-items:center;gap:3px;white-space:nowrap; }
-    .metric-symbol { display:block;width:8px;height:11px;flex:none; }
-    .metric-value { font-size:10px;font-variant-numeric:tabular-nums;letter-spacing:-.3px; }
-    .node-count { width:34px; }
-    .maze-goal-icon { width:35px;height:17px; }
-    .actions { display:flex;align-items:center;gap:1px;flex:none; }
-    button { appearance:none;position:relative;display:grid;place-items:center;flex:none;margin:0;padding:0;width:28px;height:30px;border:0;border-radius:8px;background:transparent;color:#565345;cursor:pointer;touch-action:manipulation; }
+    .actions { display:flex;align-items:center;gap:3px;margin-left:auto;flex:none; }
+    button { appearance:none;position:relative;display:grid;place-items:center;flex:none;margin:0;padding:0;width:29px;height:30px;border:0;border-radius:8px;background:transparent;color:#565345;font:inherit;cursor:default;touch-action:manipulation; }
     .control-icon { display:block;width:16px;height:16px;pointer-events:none; }
-    button.drag-handle { width:18px;color:#aaa28f;cursor:grab; }
-    .drag-handle .control-icon { width:12px;height:16px; }
+    button.drag-handle { width:15px;color:#aaa28f;cursor:default; }
+    button.drag-handle:hover:not(:disabled) { cursor:move; }
+    .drag-handle .control-icon { width:11px;height:16px; }
     button:hover { background:#eee8da;color:#302f28; }
     button:active { background:#e7dfce; }
-    button:focus-visible { outline:1.5px solid #a47556;outline-offset:-2px; }
+    button:focus-visible,.status:focus-visible { outline:1.5px solid #a47556;outline-offset:-2px; }
     button:disabled { opacity:.3;cursor:default;background:transparent; }
-    .mode-control { display:flex;align-items:center;gap:1px;flex:none;height:30px;padding:2px;border-radius:9px;background:#eee8dc; }
-    button.mode-button { width:26px;height:26px;border-radius:7px;color:#999080; }
-    .maze-mode-slot { display:block;flex:none;height:26px;border-radius:7px; }
-    .maze-mode-slot[data-unavailable="true"] { cursor:not-allowed; }
-    .maze-mode-slot:focus-visible { outline:1.5px solid #a47556;outline-offset:1px; }
-    .maze-mode-slot[data-unavailable="true"] .mode-button { pointer-events:none;opacity:1;color:#665b4b; }
-    .maze-locked-mark { display:none; }
-    .maze-mode-slot[data-unavailable="true"] .maze-locked-mark { display:inline; }
-    .maze-mode-slot[data-unavailable="true"] .maze-unlocked-mark { display:none; }
-    .maze-tooltip { position:absolute;z-index:3;width:190px;max-width:calc(100% - 12px);padding:8px 10px;border:1px solid rgba(63,59,46,.17);border-radius:9px;background:#fffcf3;box-shadow:0 3px 12px rgba(43,39,25,.12);color:#565345;font:11px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;pointer-events:none; }
-    .maze-tooltip-guide { margin:0 0 7px;color:#766d5e; }
-    .maze-criterion { display:flex;align-items:center;justify-content:space-between;gap:12px; }
-    .maze-criterion + .maze-criterion { margin-top:4px; }
-    .criterion-mark { width:14px;height:14px;flex:none;color:#b3453f; }
-    .maze-criterion[data-passed="true"] .criterion-mark { color:#39733f; }
-    .mode-button[aria-pressed="true"] { color:#965d40;background:#fffcf3;box-shadow:0 1px 3px rgba(65,47,26,.13),inset 0 0 0 1px rgba(154,101,75,.17); }
-    .mode-button[aria-pressed="true"] .control-icon { stroke-width:1.8; }
-    .hint[aria-pressed="true"] { background:#eee0ce;color:#995e40; }
-    .hint[aria-pressed="true"] .hint-slash { display:block; }
-    .hint-slash { display:none; }
-    .new-slot { position:relative;flex:none;width:28px;height:30px; }
+    .main-info { display:flex;align-items:center;flex:1;min-width:90px;height:30px; }
+    .difficulty-stars { display:flex;align-items:center;gap:3px;height:24px;color:#aa8950; }
+    .difficulty-star { display:block;width:15px;height:15px;fill:none;stroke:#c8bca3;stroke-width:1.4;stroke-linejoin:round; }
+    .difficulty-star[data-filled="true"] { fill:#b59962;stroke:#a48752; }
+    .round-xp { color:#5e654e;font:600 20px/1 ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;letter-spacing:-.8px;white-space:nowrap; }
+    .round-xp-unit { color:#91836a;font:10px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;letter-spacing:0;margin-left:4px; }
+    .new-slot { position:relative;flex:none;width:29px;height:30px; }
     .new-slot button { position:absolute;inset:0; }
     .exit { color:#8c8272; }
     .exit:hover { color:#ac5f46;background:#f0e2d7; }
+    .profile { min-width:0;flex:1; }
+    .profile-line { display:flex;align-items:center;gap:6px;white-space:nowrap; }
+    .profile-level { color:#705b40;font:600 10px/14px ui-monospace,Consolas,monospace; }
+    .profile-level[data-leveled-up="true"]::after { content:" ↑";color:#6b7c4f; }
+    .profile-title { overflow:hidden;text-overflow:ellipsis;color:#8a7c65;font-size:10px; }
+    .xp-track { height:3px;margin-top:3px;overflow:hidden;border-radius:3px;background:#e3dbc8; }
+    .xp-fill { height:100%;width:0;background:#a68c5a;border-radius:3px; }
+    .collection-summary { display:flex;align-items:center;gap:7px;color:#867760;font:10px/1.2 ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;white-space:nowrap; }
+    .collection-xp { color:#8c7449; }
+    .collection-multiplier { color:#648676; }
+    .run-hud { display:none;position:absolute;left:50%;top:5px;transform:translateX(-50%);align-items:center;gap:12px;padding:5px 10px;border:1px solid rgba(91,76,50,.1);border-radius:12px;background:rgba(249,246,236,.92);color:#786d58;font:10px/1.2 ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none; }
+    /* Preserve the footprint used by map generation while the controls fold. */
+    .toolbar[data-state="DRAWING"] { background:transparent;border-color:transparent;box-shadow:none;pointer-events:none;cursor:none; }
+    .toolbar[data-state="DRAWING"] .toolbar-main,.toolbar[data-state="DRAWING"] .toolbar-meta { visibility:hidden; }
+    .toolbar[data-state="DRAWING"] .run-hud { display:flex; }
     .sr-only,.message,.state-label { position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;clip-path:inset(50%)!important;white-space:nowrap!important;border:0!important; }
     .generation-error { position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(400px,calc(100% - 32px));padding:14px 16px;border:1px solid rgba(151,84,57,.25);border-radius:12px;background:rgba(255,250,240,.97);color:#87573f;box-shadow:0 3px 16px rgba(43,39,25,.1);font:12px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;overflow-wrap:anywhere;pointer-events:none; }
     [hidden] { display:none!important; }
-    @media(max-width:400px) { .toolbar-main { gap:3px; } button,.new-slot,button.mode-button { width:24px; } button.drag-handle { width:14px; } .status { width:16px; } .metrics { min-width:41px; } .node-count { width:30px;font-size:9.5px; } }
-    @media(max-width:360px) { .toolbar-main { gap:2px; } button,.new-slot,button.mode-button { width:22px; } button.drag-handle { width:12px; } .drag-handle .control-icon { width:10px; } .status,.status-icon { width:14px; } }
+    @media(max-width:360px) { .toolbar { padding-inline:7px; } .toolbar-main { gap:3px; } .actions { gap:1px; } button,.new-slot { width:26px; } button.drag-handle { width:12px; } .status { width:16px; } .toolbar-meta { gap:8px; } }
     @media(prefers-reduced-motion:reduce) { * { animation:none!important; } }
   `;
 
@@ -118,17 +115,6 @@
     height: rect.height ?? ((rect.bottom ?? 0) - (rect.top ?? rect.y ?? 0)),
   });
   const iconMarkup = content => `<svg class="control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${content}</svg>`;
-  const mazeCriteria = availability => {
-    const requirements = { ...P.Config.MAZE_REQUIREMENTS, ...availability.requirements };
-    const densityKnown = Number.isFinite(availability.obstacleRatio) && availability.obstacleRatio >= 0 && availability.obstacleRatio <= 1;
-    const distributionKnown = Number.isInteger(availability.occupiedRegions) && availability.occupiedRegions >= 0 && availability.occupiedRegions <= 48;
-    return [
-      { id: 'complexity', label: '复杂度', known: densityKnown,
-        passed: densityKnown && availability.obstacleRatio >= requirements.minObstacleRatio },
-      { id: 'distribution', label: '分散度', known: distributionKnown,
-        passed: distributionKnown && availability.occupiedRegions >= requirements.minOccupiedRegions },
-    ];
-  };
 
   // Split only the final reachable collision edges. A merged straight edge can
   // touch old page content for part of its length and added wall clearance for
@@ -173,7 +159,6 @@
     return { original, added };
   };
   const icons = {
-    hint: '<path d="M2 12C7 4 17 4 22 12C17 20 7 20 2 12Z"/><circle cx="12" cy="12" r="2.7"/><path class="hint-slash" d="M4 4L20 20"/>',
     retry: '<path d="M5 9a7.4 7.4 0 1 1-.4 7M5 4v5h5"/>',
     newPuzzle: '<rect x="4" y="4" width="16" height="16" rx="3" transform="rotate(-7 12 12)"/><circle cx="8" cy="8" r=".8" fill="currentColor"/><circle cx="16" cy="8" r=".8" fill="currentColor"/><circle cx="12" cy="12" r=".8" fill="currentColor"/><circle cx="8" cy="16" r=".8" fill="currentColor"/><circle cx="16" cy="16" r=".8" fill="currentColor"/>',
     regenerate: '<path d="M5 8a8 8 0 0 1 13-2l2 2M20 3v5h-5M19 16a8 8 0 0 1-13 2l-2-2M4 21v-5h5"/>',
@@ -207,12 +192,8 @@
   });
 
   P.Overlay = class Overlay {
-    constructor({ onRetry, onNewPuzzle, onExit, onRegenerate, onDebug, onModeChange, onHint, onToolbarMove } = {}) {
-      this.mode = P.Config?.DEFAULT_MODE || 'normal';
-      this.mazeAvailability = { available: false, reason: '正在检查页面是否适合生成迷宫' };
-      this.unlimitedInk = false;
+    constructor({ onRetry, onNewPuzzle, onExit, onRegenerate, onDebug, onToolbarMove } = {}) {
       this.generationFailed = false;
-      this.inkPercentage = 100;
       this.host = document.createElement('div');
       this.host.id = '__pagepath_overlay__';
       this.host.setAttribute('data-pagepath-root', '');
@@ -226,7 +207,7 @@
       style.textContent = P.OVERLAY_CSS;
       this.shadowRoot.append(style);
 
-      this.surface = element('svg', { class: 'surface', xmlns: SVG_NS, 'aria-label': 'PagePath 一笔画地图', role: 'img' });
+      this.surface = element('svg', { class: 'surface', xmlns: SVG_NS, 'aria-label': 'PagePath 迷宫地图', role: 'img' });
       this.svg = this.surface;
       this.debugLayer = element('g', { class: 'visual-layer', 'aria-hidden': 'true' });
       this.mazeWallLayer = element('g', { class: 'visual-layer maze-walls', 'aria-hidden': 'true' });
@@ -238,23 +219,31 @@
         element('stop', { offset: '100%', 'stop-color': '#dc3029', 'stop-opacity': 0 }));
       this.obstacleShape = element('path', { id: 'pagepath-obstacles' });
       warningDefs.append(this.warningGradient, this.obstacleShape);
-      this.allObstacles = element('use', { class: 'obstacle-map visual-layer', href: '#pagepath-obstacles',
-        stroke: '#d72f29', 'stroke-width': 1.5, opacity: .8, visibility: 'hidden', 'aria-hidden': 'true' });
+      for (const [name, color] of [['gold', '#d4b572'], ['jade', '#96c6b0']]) {
+        const glow = element('radialGradient', { id: 'pagepath-bubble-' + name });
+        glow.append(element('stop', { offset: '0%', 'stop-color': color, 'stop-opacity': .75 }),
+          element('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': 0 }));
+        warningDefs.append(glow);
+      }
       this.obstacleFlash = element('use', { class: 'obstacle-flash visual-layer', href: '#pagepath-obstacles',
         stroke: '#e33128', 'stroke-width': 2, opacity: 0, 'aria-hidden': 'true' });
       this.flashAnimation = null;
-      this.routeHintVisible = false;
       this.obstacleWarning = element('path', { class: 'obstacle-warning visual-layer',
         fill: 'none', stroke: 'url(#pagepath-warning)', 'stroke-width': 1.8, 'aria-hidden': 'true' });
-      this.hintLayer = element('g', { class: 'visual-layer hint-layer', 'aria-hidden': 'true' });
       this.pathLayer = element('g', { class: 'visual-layer', 'aria-hidden': 'true' });
       this.pathOutline = element('polyline', { class: 'path-outline' });
       this.path = element('polyline', { class: 'path' });
       this.inkStroke = element('g', { class: 'ink-stroke' });
       this.pathLayer.append(this.pathOutline, this.path, this.inkStroke);
+      this.collectibleLayer = element('g', { class: 'visual-layer collectibles', 'aria-hidden': 'true' });
+      this.pickupLayer = element('g', { class: 'visual-layer pickups', 'aria-hidden': 'true' });
+      this.collectibleElements = new Map();
+      this.pickupAnimations = new Map();
+      this.collectedIds = new Set();
+      this.collection = { xp: 0, multiplier: 1 };
       this.nodeLayer = element('g', { class: 'visual-layer', 'aria-hidden': 'true' });
-      this.surface.append(warningDefs, this.mazeFloorLayer, this.mazeWallLayer, this.debugLayer, this.allObstacles, this.obstacleFlash,
-        this.obstacleWarning, this.hintLayer, this.pathLayer, this.nodeLayer);
+      this.surface.append(warningDefs, this.mazeFloorLayer, this.mazeWallLayer, this.debugLayer, this.obstacleFlash,
+        this.obstacleWarning, this.collectibleLayer, this.pathLayer, this.nodeLayer, this.pickupLayer);
       this.shadowRoot.append(this.surface);
       this.brushCursor = element('svg', {
         class: 'brush-cursor', viewBox: '0 0 24 36', width: 24, height: 36,
@@ -273,11 +262,6 @@
       );
       this.brushCursor.append(brushBody);
       this.shadowRoot.append(this.brushCursor);
-      this.cursorInk = document.createElement('span');
-      this.cursorInk.className = 'cursor-ink';
-      this.cursorInk.textContent = '100%';
-      this.cursorInk.setAttribute('aria-label', '剩余墨水 100%');
-      this.shadowRoot.append(this.cursorInk);
 
       this.toolbar = document.createElement('section');
       this.toolbar.className = 'toolbar';
@@ -290,55 +274,44 @@
             <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path/></svg>
             <span class="state-label">准备中</span>
           </span>
-          <div class="metrics">
-            <span class="metric metric-nodes" title="已收集的墨点">
-              <svg class="metric-symbol" viewBox="0 0 10 12" aria-hidden="true"><path d="M2 4C1 1 7 1 8 4C11 7 6 11 3 9C0 8 0 5 2 4Z" fill="currentColor"/></svg>
-              <span class="metric-value node-count">0 / 0</span>
-            </span>
-            <span class="metric metric-maze" title="穿过迷宫，到达纸张" aria-label="穿过迷宫，到达纸张" hidden>
-              <svg class="maze-goal-icon" viewBox="0 0 35 17" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12V6Q2 3 6 3Q10 3 10 6V12Z"/><ellipse cx="6" cy="7" rx="2.2" ry="2.7"/><path d="M13 8H21M18 5L21 8L18 11M25 2H30L33 5V15H25ZM30 2V5H33"/></svg>
-            </span>
+          <div class="main-info">
+            <span class="star-rating difficulty-stars" role="img" aria-label="正在生成星级" title="本局难度"></span>
+            <span class="round-xp" aria-label="本局经验" hidden><span class="xp-value">+0</span><span class="round-xp-unit">经验</span></span>
           </div>
           <div class="actions">
-            <div class="mode-control" role="group" aria-label="游戏难度" data-mode="normal">
-              <button class="mode-button" type="button" data-mode="normal" aria-pressed="true" aria-label="萌新">${iconMarkup('<path d="M4 18L12 5L20 18Z"/>')}</button>
-              <button class="mode-button" type="button" data-mode="hell" aria-pressed="false" aria-label="糕手">${iconMarkup('<path d="M2 18L8 7L14 18M10 18L16 7L22 18"/>')}</button>
-              <button class="mode-button" type="button" data-mode="immortal" aria-pressed="false" aria-label="神仙">${iconMarkup('<path d="M1 18L6 9L11 18M7 18L12 4L17 18M13 18L18 9L23 18"/>')}</button>
-              <span class="maze-mode-slot" data-unavailable="true" role="group" aria-label="第二关" title="">
-                <button class="mode-button" type="button" data-mode="maze" aria-pressed="false" aria-label="第二关" aria-describedby="pagepath-maze-reason" disabled>${iconMarkup('<g class="maze-locked-mark" stroke-width="1.7"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></g><g class="maze-unlocked-mark"><path d="M12 2.5L14.9 8.5L21.5 9.4L16.8 14L17.9 20.6L12 17.5L6.1 20.6L7.2 14L2.5 9.4L9.1 8.5Z"/></g>')}</button>
-              </span>
-            </div>
-            <button class="hint" type="button" aria-label="提示" aria-pressed="false" title="显示参考路线">${iconMarkup(icons.hint)}<span class="control-label sr-only">提示</span></button>
-            <button class="retry" type="button" aria-label="重试" title="重试当前关卡">${iconMarkup(icons.retry)}<span class="sr-only">重试</span></button>
+            <button class="retry" type="button" aria-label="重试" title="重试当前迷宫">${iconMarkup(icons.retry)}</button>
             <span class="new-slot">
-              <button class="new-puzzle" type="button" aria-label="新地图" title="生成新地图">${iconMarkup(icons.newPuzzle)}<span class="sr-only">新地图</span></button>
-              <button class="regenerate" type="button" aria-label="重新生成" title="重新截取页面并生成关卡" hidden>${iconMarkup(icons.regenerate)}<span class="sr-only">重新生成</span></button>
+              <button class="new-puzzle" type="button" aria-label="新地图" title="生成新迷宫">${iconMarkup(icons.newPuzzle)}</button>
+              <button class="regenerate" type="button" aria-label="重新生成" title="重新截取页面并生成迷宫" hidden>${iconMarkup(icons.regenerate)}</button>
             </span>
-            <button class="exit" type="button" aria-label="退出游戏" title="退出游戏 · 右键 / Esc">${iconMarkup(icons.exit)}<span class="sr-only">退出</span></button>
+            <button class="exit" type="button" aria-label="退出游戏" title="退出游戏 · 右键 / Esc">${iconMarkup(icons.exit)}</button>
           </div>
         </div>
-        <span id="pagepath-maze-reason" class="sr-only"></span>
+        <div class="toolbar-meta">
+          <div class="profile" title="等级经验">
+            <div class="profile-line"><span class="profile-level">Lv.1</span><span class="profile-title">初入迷途</span></div>
+            <div class="xp-track" role="progressbar" aria-label="等级经验" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="xp-fill"></div></div>
+          </div>
+          <div class="collection-summary" hidden><span class="collection-xp">+0 XP</span><span class="collection-multiplier">×1</span></div>
+        </div>
+        <div class="run-hud" aria-hidden="true"><span class="collection-xp">+0 XP</span><span class="collection-multiplier">×1</span></div>
         <span class="message" role="status" aria-live="polite" aria-atomic="true"></span>`;
       this.shadowRoot.append(this.toolbar);
-      this.mazeTooltip = document.createElement('div');
-      this.mazeTooltip.className = 'maze-tooltip';
-      this.mazeTooltip.setAttribute('role', 'tooltip');
-      this.mazeTooltip.hidden = true;
-      this.mazeTooltip.innerHTML = '<p class="maze-tooltip-guide">寻找复杂的页面来解锁第二关。</p>' + ['complexity', 'distribution'].map(id =>
-        `<div class="maze-criterion" data-criterion="${id}"><span></span><svg class="criterion-mark" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path/></svg></div>`).join('');
-      this.shadowRoot.append(this.mazeTooltip);
+      this.starRating = this.toolbar.querySelector('.difficulty-stars');
+      this.starIcons = Array.from({ length: 5 }, () => {
+        const star = element('svg', { class: 'difficulty-star', viewBox: '0 0 24 24', 'aria-hidden': 'true', 'data-filled': 'false' });
+        star.append(element('path', { d: 'M12 2.5L14.9 8.5L21.5 9.4L16.8 14L17.9 20.6L12 17.5L6.1 20.6L7.2 14L2.5 9.4L9.1 8.5Z' }));
+        this.starRating.append(star); return star;
+      });
+      this.roundXp = this.toolbar.querySelector('.round-xp');
       this.generationError = document.createElement('div');
       this.generationError.className = 'generation-error';
       this.generationError.setAttribute('aria-hidden', 'true');
       this.generationError.hidden = true;
       this.shadowRoot.append(this.generationError);
       this.toolbarMain = this.toolbar.querySelector('.toolbar-main');
+      this.toolbarMeta = this.toolbar.querySelector('.toolbar-meta');
       this.retryButton = this.toolbar.querySelector('.retry');
-      this.hintButton = this.toolbar.querySelector('.hint');
-      this.modeButtons = [...this.toolbar.querySelectorAll('.mode-button')];
-      this.modeControl = this.toolbar.querySelector('.mode-control');
-      this.mazeModeSlot = this.toolbar.querySelector('.maze-mode-slot');
-      this.mazeReason = this.toolbar.querySelector('#pagepath-maze-reason');
       this.newPuzzleButton = this.toolbar.querySelector('.new-puzzle');
       this.regenerateButton = this.toolbar.querySelector('.regenerate');
       this.exitButton = this.toolbar.querySelector('.exit');
@@ -346,33 +319,19 @@
       this.stateLabel = this.toolbar.querySelector('.state-label');
       this.status = this.toolbar.querySelector('.status');
       this.statusPath = this.toolbar.querySelector('.status-icon path');
-      this.nodeCount = this.toolbar.querySelector('.node-count');
       this.dragHandle = this.toolbar.querySelector('.drag-handle');
       this.onToolbarMove = onToolbarMove;
       this.toolbarPosition = null;
       this.toolbarDrag = null;
-      this.nodeMetric = this.toolbar.querySelector('.metric-nodes');
-      this.mazeMetric = this.toolbar.querySelector('.metric-maze');
       this.listeners = [];
       this.bind(this.retryButton, 'click', () => {
         if (this.retryButton.disabled) return;
         if (this.generationFailed) (onRegenerate || onNewPuzzle)?.();
         else onRetry?.();
       });
-      this.bind(this.hintButton, 'click', onHint);
       this.bind(this.newPuzzleButton, 'click', onNewPuzzle);
       this.bind(this.regenerateButton, 'click', onRegenerate || onNewPuzzle);
       this.bind(this.exitButton, 'click', onExit);
-      this.listen(this.mazeModeSlot, 'pointerenter', () => { this.mazeTooltipHovered = true; this.refreshMazeTooltip(); });
-      this.listen(this.mazeModeSlot, 'pointerleave', () => { this.mazeTooltipHovered = false; this.refreshMazeTooltip(); });
-      this.listen(this.mazeModeSlot, 'focusin', () => { this.mazeTooltipFocused = true; this.refreshMazeTooltip(); });
-      this.listen(this.mazeModeSlot, 'focusout', () => { this.mazeTooltipFocused = false; this.refreshMazeTooltip(); });
-      this.listen(window, 'blur', () => this.hideMazeTooltip());
-      for (const button of this.modeButtons) {
-        this.bind(button, 'click', () => {
-          if (!button.disabled && button.dataset.mode !== this.mode) onModeChange?.(button.dataset.mode);
-        });
-      }
       if (onDebug) {
         this.debugButton = document.createElement('button');
         this.debugButton.className = 'debug-button';
@@ -400,7 +359,7 @@
       this.nodeElements = new Map();
       document.documentElement.append(this.host);
       this.resize();
-      this.update({ state: 'GENERATING', mode: this.mode, message: '正在寻找网页中的空白…' });
+      this.update({ state: 'GENERATING', message: '正在生成迷宫…' });
     }
 
     bind(target, type, callback) {
@@ -415,32 +374,6 @@
       this.listeners.push(() => target.removeEventListener(type, callback));
     }
 
-    hideMazeTooltip() {
-      this.mazeTooltipHovered = false;
-      this.mazeTooltipFocused = false;
-      this.mazeTooltip.hidden = true;
-    }
-
-    refreshMazeTooltip() {
-      const canShow = !this.mazeAvailability.available && !this.captureHidden &&
-        !['GENERATING', 'DRAWING', 'DESTROYED'].includes(this.state);
-      this.mazeModeSlot.tabIndex = canShow ? 0 : -1;
-      if (!canShow) { this.hideMazeTooltip(); return; }
-      this.mazeTooltip.hidden = !this.mazeTooltipHovered && !this.mazeTooltipFocused;
-      this.positionMazeTooltip();
-    }
-
-    positionMazeTooltip() {
-      if (this.mazeTooltip.hidden) return;
-      const anchor = this.mazeModeSlot.getBoundingClientRect(), box = this.mazeTooltip.getBoundingClientRect();
-      const margin = 6;
-      const left = Math.max(margin, Math.min(window.innerWidth - box.width - margin, anchor.left + (anchor.width - box.width) / 2));
-      const below = anchor.bottom + margin;
-      const top = below + box.height <= window.innerHeight - margin ? below : anchor.top - box.height - margin;
-      this.mazeTooltip.style.left = `${left}px`;
-      this.mazeTooltip.style.top = `${Math.max(margin, Math.min(window.innerHeight - box.height - margin, top))}px`;
-    }
-
     positionToolbar(x, y) {
       const bounds = this.toolbar.getBoundingClientRect();
       const margin = 6;
@@ -450,18 +383,43 @@
       this.toolbar.style.left = `${left}px`;
       this.toolbar.style.top = `${top}px`;
       this.toolbar.style.transform = 'none';
-      this.positionMazeTooltip();
     }
 
     clampToolbar() {
       if (this.toolbarPosition) this.positionToolbar(this.toolbarPosition.x, this.toolbarPosition.y);
-      else this.positionMazeTooltip();
+    }
+
+    keepEndpointsVisible(previousRect) {
+      const nodes = this.level?.nodes;
+      if (!nodes?.length) return;
+      const endpoints = [nodes[0], nodes.at(-1)];
+      const current = rectangle(this.toolbar.getBoundingClientRect());
+      const radius = Math.max(14, (P.Config.HIT_RADIUS || 12) + 4), margin = 6;
+      const safe = rect => endpoints.every(node =>
+        node.x + radius < rect.x || node.x - radius > rect.x + current.width ||
+        node.y + radius < rect.y || node.y - radius > rect.y + current.height);
+      if (safe(current)) return;
+      const clamp = rect => ({
+        x: Math.max(margin, Math.min(window.innerWidth - current.width - margin, rect.x)),
+        y: Math.max(margin, Math.min(window.innerHeight - current.height - margin, rect.y)),
+      });
+      // Restore the last usable spot when a drop would hide an endpoint. If a
+      // resize made it unusable too, choose the nearest safe viewport corner.
+      const previous = previousRect && clamp(previousRect);
+      if (previous && safe(previous)) { this.positionToolbar(previous.x, previous.y); return; }
+      const candidates = [
+        { x: margin, y: margin }, { x: window.innerWidth - current.width - margin, y: margin },
+        { x: margin, y: window.innerHeight - current.height - margin },
+        { x: window.innerWidth - current.width - margin, y: window.innerHeight - current.height - margin },
+      ].map(clamp).filter(safe).sort((a, b) =>
+        Math.hypot(a.x - current.x, a.y - current.y) - Math.hypot(b.x - current.x, b.y - current.y));
+      if (candidates.length) this.positionToolbar(candidates[0].x, candidates[0].y);
     }
 
     startToolbarDrag(event) {
       if (event.button !== 0 || event.isPrimary === false || this.toolbarDrag ||
           ['DRAWING', 'GENERATING', 'DESTROYED'].includes(this.state)) return;
-      const control = event.target.closest?.('button,select,input,textarea,.maze-mode-slot');
+      const control = event.target.closest?.('button,select,input,textarea');
       if (control && control !== this.dragHandle) return;
       const rect = this.toolbar.getBoundingClientRect();
       this.toolbarDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
@@ -490,7 +448,10 @@
       if (this.toolbar.hasPointerCapture?.(drag.pointerId)) {
         try { this.toolbar.releasePointerCapture(drag.pointerId); } catch { /* Pointer already released. */ }
       }
-      if (notify) this.onToolbarMove?.({ rect: rectangle(this.toolbar.getBoundingClientRect()), previousRect: drag.previousRect });
+      if (notify) {
+        this.keepEndpointsVisible(drag.previousRect);
+        this.onToolbarMove?.({ rect: rectangle(this.toolbar.getBoundingClientRect()), previousRect: drag.previousRect });
+      }
     }
 
     moveToolbarWithKeys(event) {
@@ -502,13 +463,15 @@
       const previousRect = rectangle(this.toolbar.getBoundingClientRect());
       const step = event.shiftKey ? 24 : 8;
       this.positionToolbar(previousRect.x + direction[0] * step, previousRect.y + direction[1] * step);
+      this.keepEndpointsVisible(previousRect);
       this.onToolbarMove?.({ rect: rectangle(this.toolbar.getBoundingClientRect()), previousRect });
     }
 
     hideBrush() {
       this.brushCursor.setAttribute('data-visible', 'false');
-      this.cursorInk.setAttribute('data-visible', 'false');
       this.lastBrushPoint = null;
+      this.lastPointerPoint = null;
+      this.renderCollectibleProximity(null);
       cancelAnimationFrame(this.warningFrame);
       this.warningFrame = 0;
       this.obstacleWarning.setAttribute('d', '');
@@ -517,9 +480,10 @@
     setMap(map) {
       this.cancelObstacleFlash();
       this.pixelMap = map?.kind === 'pixel-mask' ? map : null;
+      this.collectibleIndex = this.pixelMap ? P.Collision.createMaskIndex(this.pixelMap) : null;
       this.visibleContours = this.pixelMap
         ? P.Collision.reachableContours(this.pixelMap, this.level?.nodes?.[0]) : null;
-      if (this.visibleContours && this.level?.mode === 'maze') {
+      if (this.visibleContours && this.level?.maze) {
         const parts = splitMazeContours(this.visibleContours, this.pixelMap, this.level.mazeSourceAnalysis);
         this.sourceContours = parts.original;
         this.mazeContours = parts.added;
@@ -529,13 +493,13 @@
       }
       this.obstacleWarning.setAttribute('d', '');
       // The one-shot new-map flash uses original page content only. Added maze
-      // walls stay hidden until approached, and hints never reveal obstacles.
+      // walls stay hidden until approached.
       const segments = this.sourceContours?.segments || [], lines = [];
       for (let i = 0; i < segments.length; i += 4) {
         lines.push(`M${segments[i]},${segments[i + 1]}L${segments[i + 2]},${segments[i + 3]}`);
       }
       this.obstacleShape.setAttribute('d', lines.join(''));
-      this.allObstacles.setAttribute('visibility', 'hidden');
+      this.renderCollectibleProximity(this.lastPointerPoint);
     }
 
     cancelObstacleFlash() {
@@ -607,37 +571,141 @@
     }
 
     moveBrush(event) {
-      if (this.captureHidden || this.generationFailed || this.state !== 'DRAWING' || event.pointerType === 'touch') {
-        this.hideBrush();
-        return;
-      }
       const x = event.clientX, y = event.clientY;
+      const drawing = this.state === 'DRAWING';
       const toolbar = this.toolbar.getBoundingClientRect();
-      // The expanded toolbar hides the brush even during captured events.
-      // Folded controls let drawing continue across their former footprint.
-      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight ||
-          (this.state !== 'DRAWING' && x >= toolbar.left && x <= toolbar.right && y >= toolbar.top && y <= toolbar.bottom)) {
-        this.hideBrush();
+      if (this.captureHidden || this.generationFailed || !['READY', 'DRAWING'].includes(this.state) ||
+          event.pointerType === 'touch' || !Number.isFinite(x) || !Number.isFinite(y) ||
+          x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight ||
+          (!drawing && x >= toolbar.left && x <= toolbar.right && y >= toolbar.top && y <= toolbar.bottom)) {
+        this.hideBrush(); return;
+      }
+      this.lastPointerPoint = { x, y };
+      this.renderCollectibleProximity(this.lastPointerPoint);
+      if (!drawing) {
+        this.brushCursor.setAttribute('data-visible', 'false');
+        this.lastBrushPoint = null;
+        cancelAnimationFrame(this.warningFrame); this.warningFrame = 0;
+        this.obstacleWarning.setAttribute('d', '');
         return;
       }
       this.lastBrushPoint = { x, y };
       // The whole brush tilts around its fixed nib tip at local (7,32).
-      this.brushCursor.style.transform = `translate(${x - 7}px, ${y - 32}px)`;
+      this.brushCursor.style.transform = 'translate(' + (x - 7) + 'px, ' + (y - 32) + 'px)';
       this.brushCursor.setAttribute('data-visible', 'true');
-      const inkX = x + 10 + 32 < window.innerWidth ? x + 10 : x - 40;
-      this.cursorInk.style.transform = `translate(${Math.max(2, inkX)}px, ${Math.max(2, Math.min(window.innerHeight - 16, y - 13))}px)`;
-      this.cursorInk.setAttribute('data-visible', 'true');
       if (!this.warningFrame) this.warningFrame = requestAnimationFrame(() => {
         this.warningFrame = 0;
         this.renderProximity(this.lastBrushPoint);
       });
     }
 
+    renderCollectibles(collectibles = []) {
+      this.clearPickupFeedback();
+      this.collectibleLayer.replaceChildren();
+      this.collectibleElements.clear();
+      this.collectedIds = new Set();
+      const rules = P.Config.COLLECTIBLES;
+      for (const item of collectibles) {
+        if (!item || !Number.isFinite(item.x) || !Number.isFinite(item.y) ||
+            !['xp', 'multiplier'].includes(item.kind) || !Number.isFinite(item.value) || item.value <= 0) continue;
+        const id = String(item.id), radius = Math.max(1, Math.min(14, Number(item.radius) || rules.radius));
+        const rare = item.kind === 'multiplier' && item.value === rules.maxMultiplier;
+        const group = element('g', { class: 'collectible', transform: 'translate(' + item.x + ' ' + item.y + ')',
+          'data-collectible-id': id, 'data-kind': item.kind, 'data-value': item.value,
+          'data-rare': rare, 'data-collected': false, 'data-visible': false });
+        const face = element('g', { transform: 'scale(' + radius / 10 + ')' });
+        const label = item.kind === 'xp' ? '+' + item.value : '×' + item.value;
+        face.append(
+          element('circle', { class: 'bubble-glow', r: item.kind === 'multiplier' ? Math.max(rare ? 22 : 17, 80 / radius) : 17,
+            fill: 'url(#pagepath-bubble-' + (rare || item.kind === 'xp' ? 'gold' : 'jade') + ')' }),
+          element('path', { class: 'bubble-body', d: 'M-1-9.7Q6.6-10.2 9.2-3.3Q11 3.9 5.3 8.1Q-1.2 12-7.2 6.8Q-11.1 1.9-8-5Q-5.7-9.3-1-9.7Z' }),
+          element('path', { class: 'bubble-wash', d: 'M-8 1Q-3 7 7.7 3Q5.8 10-1.7 9Q-7 8-8 1Z' }),
+          element('path', { class: 'bubble-ink', d: 'M6.9-6.6Q10-3.2 9.1.1M-7 6.5Q-3.7 9.6.5 9.3' }),
+          element('path', { class: 'bubble-shine', d: 'M-6.5-5Q-4.4-8-1.8-8.1' }),
+        );
+        const text = element('text', { class: 'bubble-label', x: 0, y: .2 });
+        // A narrow passage may require a tiny collision body. Keep its reward
+        // readable and its beacon visible without enlarging that body.
+        if (item.kind === 'multiplier' && radius < 10) text.style.fontSize = 90 / radius + 'px';
+        text.textContent = label; face.append(text); group.append(face);
+        this.collectibleLayer.append(group);
+        this.collectibleElements.set(id, { item, node: group, label });
+      }
+      this.updateCollectibles();
+    }
+
+    renderCollectibleProximity(point) {
+      const rules = P.Config.COLLECTIBLES;
+      const canPreview = !this.captureHidden && !this.generationFailed && ['READY', 'DRAWING'].includes(this.state);
+      const showMultiplier = !this.captureHidden && !['GENERATING', 'DESTROYED'].includes(this.state);
+      for (const [id, { item, node }] of this.collectibleElements) {
+        let opacity = 0;
+        if (!this.collectedIds.has(id)) {
+          if (item.kind === 'multiplier' && showMultiplier) opacity = 1;
+          else if (canPreview && point) {
+            const distance = Math.hypot(point.x - item.x, point.y - item.y);
+            // Read exactly the player's final collision map. Even a thin added
+            // wall hides nearby ordinary bubbles on its other side.
+            if (distance < rules.revealDistance && (!this.collectibleIndex ||
+                !P.Collision.segmentHits(point, item, this.collectibleIndex))) {
+              opacity = Math.pow(1 - distance / rules.revealDistance, .7);
+            }
+          }
+        }
+        node.style.opacity = String(opacity);
+        node.dataset.visible = String(opacity > 0);
+      }
+    }
+
+    updateCollectibles(collectedIds = [], collection = { xp: 0, multiplier: 1 }) {
+      const next = new Set(Array.from(collectedIds, String));
+      if ([...this.collectedIds].some(id => !next.has(id))) this.clearPickupFeedback();
+      for (const [id, entry] of this.collectibleElements) {
+        if (next.has(id) && !this.collectedIds.has(id) && this.state === 'DRAWING') this.showPickupFeedback(entry);
+        entry.node.dataset.collected = String(next.has(id));
+      }
+      this.collectedIds = next;
+      this.collection = { xp: Math.max(0, Math.round(Number(collection.xp) || 0)),
+        multiplier: Math.max(1, Number(collection.multiplier) || 1) };
+      for (const node of this.toolbar.querySelectorAll('.collection-xp')) node.textContent = '+' + this.collection.xp.toLocaleString('zh-CN') + ' XP';
+      for (const node of this.toolbar.querySelectorAll('.collection-multiplier')) node.textContent = '×' + this.collection.multiplier;
+      this.toolbar.querySelector('.run-hud').setAttribute('aria-label', '已收集 ' + this.collection.xp + ' 经验 · ' + this.collection.multiplier + ' 倍');
+      this.updateCollectionSummary();
+      this.renderCollectibleProximity(this.lastPointerPoint);
+    }
+
+    updateCollectionSummary() {
+      const completed = this.result && ['SUCCESS', 'PAUSED'].includes(this.state);
+      this.toolbar.querySelector('.collection-summary').hidden = Boolean(completed ||
+        !this.collection.xp && this.collection.multiplier === 1);
+    }
+
+    showPickupFeedback({ item, label }) {
+      const group = element('g', { class: 'collectible-pickup', 'data-kind': item.kind,
+        transform: 'translate(' + item.x + ' ' + item.y + ')' });
+      const contents = element('g');
+      const text = element('text', { class: 'pickup-label', y: -3 }); text.textContent = label;
+      contents.append(element('circle', { class: 'pickup-ring', r: 12 }), text); group.append(contents);
+      this.pickupLayer.append(group);
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const frames = reduced ? [{ opacity: .8 }, { opacity: 0 }]
+        : [{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(-15px)' }];
+      const animation = contents.animate(frames, { duration: reduced ? 180 : 560, easing: 'ease-out' });
+      this.pickupAnimations.set(animation, group);
+      animation.onfinish = () => { group.remove(); this.pickupAnimations.delete(animation); };
+    }
+
+    clearPickupFeedback() {
+      for (const [animation, node] of this.pickupAnimations) {
+        animation.onfinish = null; animation.cancel(); node.remove();
+      }
+      this.pickupAnimations.clear();
+    }
+
     setCaptureHidden(hidden) {
       this.captureHidden = Boolean(hidden);
       this.hideBrush();
       if (hidden) this.cancelObstacleFlash();
-      if (hidden) this.hideMazeTooltip();
       if (hidden) this.host.style.setProperty('opacity', '0', 'important');
       else this.host.style.removeProperty('opacity');
     }
@@ -699,18 +767,17 @@
         this.mazeFloorLayer.append(element('path', { d, fill: '#fffaf0', 'fill-opacity': 0.98 }));
       }
       if (!level) this.setMap(null);
-      this.renderHint(false);
-      this.update({ hintVisible: false });
-      if (level?.mode) this.update({ mode: level.mode, unlimitedInk: Boolean(level.unlimitedInk || level.mode === 'maze') });
+      this.update({ difficulty: level?.difficulty ?? 0, stars: level?.stars, result: null });
+      this.renderCollectibles(level?.collectibles || []);
       this.resize();
       this.nodeLayer.replaceChildren();
       this.nodeElements.clear();
       this.renderPath([]);
       if (!level?.nodes?.length) return;
       level.nodes.forEach((node, index) => {
-        const kind = node.kind || node.type || (index === 0 ? 'start' : index === level.nodes.length - 1 ? 'finish' : 'checkpoint');
+        const kind = index === 0 ? 'start' : 'finish';
         const group = element('g', {
-          class: `node ${kind === 'start' ? 'inkstone' : kind === 'finish' || kind === 'end' ? 'paper' : 'ink-dot'}`,
+          class: `node ${kind === 'start' ? 'inkstone' : 'paper'}`,
           transform: `translate(${node.x} ${node.y})`,
           'data-node-id': node.id ?? index, 'data-collected': Boolean(node.collected),
         });
@@ -729,13 +796,6 @@
             element('path', { class: 'paper-line', d: 'M-4-3H0M-4 1H3M-4 5H0' }),
             element('rect', { class: 'collected-mark', x: 1.5, y: 4, width: 3.5, height: 3.5, rx: .5, transform: 'rotate(-8 3.3 5.8)' }),
           );
-        } else {
-          group.append(
-            element('circle', { class: 'ink-halo', r: 6.4 }),
-            element('path', { class: 'ink-drop', d: 'M-4-3C-3-6 1-5 3-4C6-3 5 0 5 2C4 5 0 6-2 4C-5 5-6 0-4-3Z', transform: `rotate(${(index * 47) % 180})` }),
-            element('circle', { class: 'ink-grain', cx: -6, cy: 2, r: .75 }),
-            element('circle', { class: 'collected-mark', r: 1.65 }),
-          );
         }
         this.nodeLayer.append(group);
         this.nodeElements.set(node.id ?? index, group);
@@ -752,8 +812,7 @@
     }
 
     renderPath(points = []) {
-      const mode = P.getMode(this.level?.mode || this.mode);
-      const tailLength = this.level?.trailLength ?? mode.trailLength;
+      const tailLength = this.level?.trailLength ?? P.Config.TRAIL_LENGTH ?? 45;
       const tail = P.Trail.clip(points, tailLength);
       const coordinates = pointString(tail);
       this.path.setAttribute('points', coordinates);
@@ -791,7 +850,7 @@
           opacity: (.12 + .62 * i / count).toFixed(2) }));
       }
       // A fine broken fibre gives the stroke a dry-brush edge instead of a
-      // uniform black wire. It is visual only; ink counts the original points.
+      // uniform black wire. It is visual only and does not affect collision.
       const fibre = samples.slice(Math.floor(count * .25), Math.floor(count * .85))
         .map((point, i) => ({ x: point.x + (edges[i + Math.floor(count * .25)].left.x - point.x) * .35,
           y: point.y + (edges[i + Math.floor(count * .25)].left.y - point.y) * .35 }));
@@ -799,109 +858,38 @@
         class: 'ink-bristle', points: pointString(fibre), 'stroke-dasharray': '2.5 1.4 4 .8' }));
     }
 
-    renderHint(visible) {
-      this.hintLayer.replaceChildren();
-      const route = this.level?.referencePath;
-      this.routeHintVisible = Boolean(visible && route?.length && this.mode !== 'maze' && this.level?.mode !== 'maze');
-      this.allObstacles.setAttribute('visibility', 'hidden');
-      if (this.routeHintVisible) this.cancelObstacleFlash();
-      this.renderProximity(this.lastBrushPoint);
-      if (!this.routeHintVisible) return;
-      const points = pointString(route);
-      this.hintLayer.append(
-        element('polyline', { class: 'hint-outline', points }),
-        element('polyline', { class: 'hint-route hint-path', points }),
-      );
-      // Place direction chevrons by distance rather than at every grid corner,
-      // so both long straight sections and dense bends remain easy to read.
-      let untilArrow = 38;
-      for (let index = 1; index < route.length; index++) {
-        const start = route[index - 1], end = route[index];
-        const dx = end.x - start.x, dy = end.y - start.y;
-        const length = Math.hypot(dx, dy);
-        if (!length) continue;
-        for (; untilArrow < length; untilArrow += 84) {
-          const ratio = untilArrow / length;
-          const x = start.x + dx * ratio, y = start.y + dy * ratio;
-          const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-          this.hintLayer.append(element('path', {
-            class: 'hint-arrow', d: 'M-4,-3 L0,0 L-4,3',
-            transform: `translate(${x} ${y}) rotate(${angle})`,
-          }));
-        }
-        untilArrow -= length;
-      }
-      for (const [index, node] of (this.level.nodes || []).entries()) {
-        const label = element('text', { class: 'hint-step', x: node.x + 10, y: node.y + 4 });
-        label.textContent = String(index + 1);
-        this.hintLayer.append(label);
-      }
-    }
-
-    update({ state, nodes, total, ink, inkMultiplier, message, score, difficulty, efficiency, mode, hintVisible,
-      mazeAvailability, unlimitedInk, generationFailed } = {}) {
+    update({ state, message, difficulty, stars, profile, result, generationFailed } = {}) {
       if (generationFailed !== undefined) this.generationFailed = Boolean(generationFailed);
-      if (mazeAvailability !== undefined) {
-        // Replace the measured snapshot instead of merging it: a new capture
-        // may be pending, and must not display numbers from the previous page.
-        this.mazeAvailability = { ...mazeAvailability, available: Boolean(mazeAvailability?.available),
-          reason: typeof mazeAvailability?.reason === 'string' && mazeAvailability.reason.trim()
-            ? mazeAvailability.reason.trim() : '此页面暂不适合生成迷宫' };
+      if (difficulty !== undefined) this.difficulty = Number.isFinite(difficulty) ? Math.max(0, Math.min(100, difficulty)) : 0;
+      if (stars !== undefined || difficulty !== undefined || !this.stars) {
+        const rating = Number.isFinite(stars) ? stars : P.Difficulty.stars(this.difficulty || 0);
+        this.stars = Math.max(1, Math.min(5, Math.round(rating)));
       }
-      if (mazeAvailability !== undefined || !this.mazeReason.textContent) {
-        const criteria = mazeCriteria(this.mazeAvailability);
-        for (const criterion of criteria) {
-          const row = this.mazeTooltip.querySelector(`[data-criterion="${criterion.id}"]`);
-          row.dataset.passed = String(criterion.passed);
-          row.querySelector('span').textContent = criterion.label;
-          row.setAttribute('aria-label', `${criterion.label}：${criterion.known ? criterion.passed ? '已达标' : '未达标' : '待检测'}`);
-          row.querySelector('path').setAttribute('d', criterion.passed ? 'M3 8L6.5 11.5L13 4.5' : 'M4 4L12 12M12 4L4 12');
-        }
-        this.mazeReason.textContent = criteria.map(criterion => `${criterion.label}：${criterion.known ? criterion.passed ? '已达标' : '未达标' : '待检测'}`).join('；');
+      if (profile) {
+        this.profile = profile;
+        const level = Math.max(1, Math.floor(profile.level || 1));
+        const current = Math.max(0, Math.round(profile.currentXp ?? profile.xpIntoLevel ?? 0));
+        const required = Math.max(1, Math.round(profile.nextLevelXp ?? profile.xpForNextLevel ?? 1));
+        const percent = Math.max(0, Math.min(100, Number.isFinite(profile.progress) ? profile.progress * 100 : current / required * 100));
+        const title = profile.title || '初入迷途';
+        this.toolbar.querySelector('.profile-level').textContent = 'Lv.' + level;
+        this.toolbar.querySelector('.profile-title').textContent = title;
+        this.toolbar.querySelector('.profile').title = 'Lv.' + level + ' · ' + title + ' · ' + current + ' / ' + required + ' XP';
+        this.toolbar.querySelector('.xp-fill').style.width = percent + '%';
+        this.toolbar.querySelector('.xp-track').setAttribute('aria-valuenow', String(Math.round(percent)));
+        this.toolbar.querySelector('.xp-track').setAttribute('aria-valuetext', current + ' / ' + required + ' XP');
       }
-      if (mode !== undefined || inkMultiplier !== undefined || mazeAvailability !== undefined) {
-        const profile = P.getMode(mode ?? this.mode);
-        this.mode = profile.id;
-        this.modeControl.dataset.mode = this.mode;
-        this.toolbar.dataset.mode = this.mode;
-        for (const button of this.modeButtons) {
-          const option = P.getMode(button.dataset.mode), selected = option.id === this.mode;
-          button.setAttribute('aria-pressed', String(selected));
-          button.setAttribute('aria-label', option.label);
-          button.title = option.id === 'maze' && !this.mazeAvailability.available ? '' : option.label;
-          if (option.id === 'maze') {
-            this.mazeModeSlot.title = button.title;
-            this.mazeModeSlot.dataset.unavailable = String(!this.mazeAvailability.available);
-            for (const control of [button, this.mazeModeSlot]) {
-              if (this.mazeAvailability.available) control.removeAttribute('aria-describedby');
-              else control.setAttribute('aria-describedby', 'pagepath-maze-reason');
-            }
-          }
-          if (selected) this.modeControl.title = button.title;
-        }
-        this.surface.setAttribute('aria-label', this.mode === 'maze' ? 'PagePath 第二关迷宫地图' : 'PagePath 一笔画地图');
-      }
-      const noHint = this.mode === 'maze' || this.level?.mode === 'maze';
-      if (noHint) {
-        this.renderHint(false);
-        hintVisible = false;
-      }
-      if (hintVisible !== undefined) {
-        this.hintButton.querySelector('.control-label').textContent = hintVisible ? '收起' : '提示';
-        this.hintButton.setAttribute('aria-label', hintVisible ? '收起提示' : '提示');
-        this.hintButton.setAttribute('aria-pressed', String(Boolean(hintVisible)));
-      }
-      this.hintButton.hidden = noHint;
-      this.hintButton.title = `${this.hintButton.getAttribute('aria-pressed') === 'true' ? '收起' : '显示'}参考路线`;
+      if (result !== undefined) this.result = result;
       if (state) {
         this.state = state;
         if (['PAUSED', 'GENERATING', 'DESTROYED'].includes(state)) this.cancelObstacleFlash();
         this.toolbar.dataset.state = state;
         this.toolbarMain.inert = state === 'DRAWING';
+        this.toolbarMeta.inert = state === 'DRAWING';
         this.surface.dataset.state = state;
         this.stateLabel.textContent = {
-          IDLE: '待开始', GENERATING: '生成中', READY: '待开始', DRAWING: '描绘中',
-          FAILED: this.generationFailed ? '生成失败' : '再试一次', SUCCESS: '已完成', PAUSED: '已暂停', DESTROYED: '已退出',
+          IDLE: '待开始', GENERATING: '生成中', READY: '待开始', DRAWING: '探索中',
+          FAILED: this.generationFailed ? '正在恢复地图' : '再试一次', SUCCESS: '已完成', PAUSED: '已暂停', DESTROYED: '已退出',
         }[state] || state;
         this.statusPath.setAttribute('d', {
           IDLE: 'M8 5Q4 6 4 12Q4 19 12 19Q20 19 20 12Q20 4 12 4Q10 4 8 5ZM8 9Q12 6 16 9',
@@ -912,77 +900,64 @@
           PAUSED: 'M9 6V18M15 6V18', DESTROYED: 'M7 7L17 17M17 7L7 17',
         }[state] || '');
         if (this.generationFailed || state !== 'DRAWING') this.hideBrush();
-        const busy = state === 'GENERATING';
-        const paused = state === 'PAUSED';
-        this.dragHandle.disabled = busy || state === 'DRAWING' || state === 'DESTROYED';
-        if (this.dragHandle.disabled) this.endToolbarDrag();
-        this.retryButton.disabled = busy || paused || (!this.level && !this.generationFailed);
-        const retryLabel = this.generationFailed ? '刷新地图' : '重试';
-        this.retryButton.setAttribute('aria-label', retryLabel);
-        this.retryButton.title = this.generationFailed ? '重新截取页面并生成关卡' : '重试当前关卡';
-        if (this.retryButton.dataset.refresh !== String(this.generationFailed)) {
-          this.retryButton.innerHTML = `${iconMarkup(this.generationFailed ? icons.regenerate : icons.retry)}<span class="sr-only">${retryLabel}</span>`;
-          this.retryButton.dataset.refresh = String(this.generationFailed);
-        }
-        this.newPuzzleButton.disabled = busy;
-        this.newPuzzleButton.hidden = paused;
-        this.regenerateButton.hidden = !paused;
       }
-      for (const button of this.modeButtons) {
-        button.disabled = ['GENERATING', 'DRAWING', 'DESTROYED'].includes(this.state) ||
-          (button.dataset.mode === 'maze' && !this.mazeAvailability.available);
+      const busy = this.state === 'GENERATING';
+      const drawing = this.state === 'DRAWING';
+      const paused = this.state === 'PAUSED';
+      const destroyed = this.state === 'DESTROYED';
+      this.dragHandle.disabled = busy || drawing || destroyed;
+      if (this.dragHandle.disabled) this.endToolbarDrag();
+      this.retryButton.disabled = busy || drawing || paused || destroyed || (!this.level && !this.generationFailed);
+      const retryLabel = this.generationFailed ? '刷新地图' : '重试';
+      this.retryButton.setAttribute('aria-label', retryLabel);
+      this.retryButton.title = this.generationFailed ? '重新截取页面并生成迷宫' : '重试当前迷宫';
+      if (this.retryButton.dataset.refresh !== String(this.generationFailed)) {
+        this.retryButton.innerHTML = iconMarkup(this.generationFailed ? icons.regenerate : icons.retry);
+        this.retryButton.dataset.refresh = String(this.generationFailed);
       }
-      this.refreshMazeTooltip();
-      this.hintButton.disabled = noHint || !this.level?.referencePath?.length ||
-        ['GENERATING', 'DRAWING', 'PAUSED', 'DESTROYED'].includes(this.state);
-      if (nodes !== undefined) this.collected = nodes;
-      if (total !== undefined) this.total = total;
-      this.nodeCount.textContent = `${this.collected ?? 0} / ${this.total ?? 0}`;
-      this.nodeMetric.title = `已收集墨点 ${this.collected ?? 0} / ${this.total ?? 0}`;
-      this.nodeMetric.setAttribute('aria-label', this.nodeMetric.title);
-      const maze = this.mode === 'maze';
-      this.nodeMetric.hidden = maze;
-      this.mazeMetric.hidden = !maze;
-      this.mazeMetric.title = this.state === 'SUCCESS' ? '已走出迷宫' : '穿过迷宫，到达纸张';
-      this.mazeMetric.setAttribute('aria-label', this.mazeMetric.title);
-      if (unlimitedInk !== undefined) this.unlimitedInk = Boolean(unlimitedInk);
-      else if (mode !== undefined) this.unlimitedInk = maze;
-      if (Number.isFinite(ink)) this.inkPercentage = Math.max(0, Math.min(100, Math.round(ink)));
-      this.cursorInk.textContent = this.unlimitedInk ? '∞' : `${this.inkPercentage}%`;
-      this.cursorInk.dataset.low = String(!this.unlimitedInk && this.inkPercentage <= 20);
-      this.cursorInk.dataset.unlimited = String(this.unlimitedInk);
-      this.cursorInk.setAttribute('aria-label', this.unlimitedInk ? '无限墨水' : `剩余墨水 ${this.inkPercentage}%`);
-      if (this.state === 'SUCCESS' && maze) {
-        this.message.textContent = message ?? '第二关 · 已走出迷宫';
-        this.message.classList.add('result');
-      } else if (this.state === 'SUCCESS' && score !== undefined) {
-        const parts = [P.getMode(this.mode).label, `得分 ${Math.round(score)}`];
-        if (difficulty !== undefined) parts.push(`难度 ${Math.round(difficulty)}`);
-        if (efficiency !== undefined) parts.push(`效率 ${Math.round(efficiency)}%`);
-        this.message.textContent = parts.join('  ·  ');
-        this.message.classList.add('result');
-      } else if (message !== undefined || state) {
-        const defaultMessages = {
-          GENERATING: '正在寻找网页中的空白…',
-          READY: '单击砚台开始，移动毛笔经过所有墨点，再到纸张。',
-          DRAWING: '移动毛笔 · 避开网页内容 · 收集所有墨点',
-          FAILED: this.generationFailed
-            ? (this.mode === 'maze' ? '第二关生成失败，可重试新地图、刷新页面截图或切换难度。'
-              : '当前页面空隙不足，可点击五角星进入第二关。')
-            : '点击重试，或再次单击砚台开始。',
-          SUCCESS: '路径完成。试试下一张地图。',
-          PAUSED: '页面布局发生变化，请重新生成地图。',
-          ...(maze ? { GENERATING: '正在生成迷宫…', READY: '单击砚台开始，移动毛笔穿过迷宫，到达纸张。',
-            DRAWING: '移动毛笔 · 避开墙壁 · 找到通往纸张的路', SUCCESS: '已走出迷宫。试试下一张地图。' } : {}),
+      this.newPuzzleButton.disabled = busy || drawing || destroyed;
+      this.newPuzzleButton.hidden = paused;
+      this.regenerateButton.hidden = !paused;
+      this.regenerateButton.disabled = busy || drawing || destroyed;
+      // Stars and earned experience share one fixed toolbar slot. A paused
+      // completed map retains its award without exposing storage bookkeeping.
+      const completed = Boolean(this.result && ['SUCCESS', 'PAUSED'].includes(this.state));
+      const generating = this.state === 'GENERATING' && !this.level;
+      this.starRating.hidden = completed;
+      this.starRating.dataset.stars = String(generating ? 0 : this.stars);
+      this.roundXp.hidden = !completed;
+      this.starRating.setAttribute('aria-label', generating ? '正在生成星级' : '本局难度 ' + this.stars + ' 星');
+      this.starRating.title = generating ? '正在生成星级' : this.stars + ' 星';
+      for (let index = 0; index < this.starIcons.length; index++) this.starIcons[index].dataset.filled = String(!generating && index < this.stars);
+      this.toolbar.querySelector('.profile-level').dataset.leveledUp = String(completed && Boolean(this.result?.leveledUp));
+      if (completed) {
+        const result = this.result, xp = Math.max(0, Math.round(Number(result.xp) || 0));
+        const amount = '+' + xp.toLocaleString('zh-CN');
+        this.roundXp.querySelector('.xp-value').textContent = amount;
+        this.roundXp.setAttribute('aria-label', '本局获得 ' + amount + ' 经验');
+        const details = [this.stars + ' 星'];
+        if (!xp) details.unshift('本图已结算');
+        if (result.leveledUp) details.push('升级 Lv.' + result.previousLevel + ' → Lv.' + result.level +
+          (this.profile?.title ? ' · ' + this.profile.title : ''));
+        this.roundXp.title = details.join(' · ');
+      }
+      if (message !== undefined || state) {
+        const defaults = {
+          GENERATING: '正在生成迷宫…',
+          READY: '单击砚台开始，移动毛笔穿过迷宫，到达纸张。',
+          DRAWING: '移动毛笔，避开墙壁，找到通往纸张的路。',
+          FAILED: this.generationFailed ? '地图暂未准备好，请重新截取页面。' : '碰到障碍了，再次单击砚台开始。',
+          SUCCESS: '已走出迷宫。', PAUSED: '页面尺寸变化，请重新生成迷宫。',
         };
-        this.message.textContent = message ?? defaultMessages[this.state] ?? '';
-        this.message.classList.remove('result');
+        this.message.textContent = message ?? defaults[this.state] ?? '';
+        this.message.title = this.message.textContent;
       }
-      this.message.title = this.message.textContent;
+      this.updateCollectionSummary();
+      this.renderCollectibleProximity(this.lastPointerPoint);
       this.surface.dataset.generationFailed = String(this.generationFailed);
-      this.generationError.hidden = !this.generationFailed || this.state !== 'FAILED';
+      this.generationError.hidden = !this.generationFailed || !['FAILED', 'PAUSED'].includes(this.state);
       this.generationError.textContent = this.generationError.hidden ? '' : this.message.textContent;
-      this.status.title = `${this.stateLabel.textContent} · ${this.message.textContent}`;
+      this.status.title = this.stateLabel.textContent + ' · ' + this.message.textContent;
       this.status.setAttribute('aria-label', this.status.title);
     }
 
@@ -997,38 +972,14 @@
         this.debugLayer.append(element('path', { d: lines.join(''), fill: 'none',
           stroke: '#d83f39', 'stroke-width': .7, opacity: .55 }));
       }
-      const grid = level?.grid || analysis?.grid;
-      // A single SVG path per component keeps the diagnostic grid inexpensive.
-      if (grid?.components && typeof grid.point === 'function') {
-        grid.components.forEach((component, index) => {
-          const color = `hsl(${(index * 73 + 155) % 360} 65% 47%)`;
-          const half = (grid.cellSize || 4) * .39;
-          const cells = component.map(cell => {
-            const point = grid.point(cell);
-            return `M${point.x - half},${point.y - half}h${half * 2}v${half * 2}h${-half * 2}Z`;
-          }).join('');
-          this.debugLayer.append(element('path', { d: cells, fill: color, opacity: .13 }));
-        });
-      }
-      for (const rect of analysis?.rects || analysis?.obstacles || []) {
-        const r = rectangle(rect);
-        this.debugLayer.append(element('rect', { ...r, fill: '#cf5e53', 'fill-opacity': .09, stroke: '#bd6259', 'stroke-width': .7, 'stroke-opacity': .6 }));
-      }
       const reference = level?.referencePath || level?.referenceRoute || [];
       if (reference.length) this.debugLayer.append(element('polyline', {
         points: pointString(reference), fill: 'none', stroke: '#7470cb',
         'stroke-width': 1.5, 'stroke-dasharray': '4 4', opacity: .75,
       }));
-      for (const candidate of level?.candidates || level?.checkpointCandidates || []) {
-        const point = typeof candidate === 'number' && grid?.point ? grid.point(candidate) : candidate;
-        if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) this.debugLayer.append(element('circle', {
-          cx: point.x, cy: point.y, r: 3, fill: 'none', stroke: '#ac719d', 'stroke-width': 1,
-        }));
-      }
     }
 
     destroy() {
-      this.hideMazeTooltip();
       this.endToolbarDrag(null, false);
       this.hideBrush();
       this.setMap(null);
@@ -1036,6 +987,9 @@
       this.clearSnapshot();
       this.host.remove();
       this.nodeElements.clear();
+      this.clearPickupFeedback();
+      this.collectibleElements.clear();
+      this.collectibleLayer.replaceChildren();
       this.mazeWallLayer.replaceChildren();
       this.mazeFloorLayer.replaceChildren();
       this.level = null;

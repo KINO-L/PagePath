@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "PagePath · 网页一笔画",
-  "version": "2.0.0",
-  "description": "把网页留白变成水墨一笔画与迷宫。单击砚台，移动毛笔完成路线；截图与地图分析均在本地完成。",
+  "name": "PagePath · 网页迷宫",
+  "version": "3.0.0",
+  "description": "把当前网页变成水墨迷宫。全范围随机难度，以星级显示挑战，探索出口、赢取积分、提升等级；地图与游戏进度均在本地处理。",
   "minimum_chrome_version": "103",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "storage"],
   "background": { "service_worker": "src/background.js" },
   "action": {
     "default_title": "PagePath · 点击开始 / 关闭",

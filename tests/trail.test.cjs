@@ -53,7 +53,7 @@ test('tail clipping never mutates the complete gameplay route', () => {
   for (const invalidLength of [0, -1, Infinity, NaN]) assert.deepEqual(clip(route, invalidLength), []);
 });
 
-test('overlay applies mode length to both colored path and outline in every terminal state', () => {
+test('overlay keeps the same tail length at all star ratings and terminal states', () => {
   const attributes = {}, outline = {};
   const overlay = {
     path: { setAttribute: (name, value) => { attributes[name] = value; } },
@@ -61,10 +61,10 @@ test('overlay applies mode length to both colored path and outline in every term
   };
   const route = [{ x: 0, y: 0 }, { x: 1000, y: 0 }];
   for (const state of ['DRAWING', 'SUCCESS', 'FAILED']) {
-    for (const [mode, expectedStart] of [['normal', '955.0'], ['hell', '955.0'], ['immortal', '955.0']]) {
-      Object.assign(overlay, { state, mode, level: { mode } });
+    for (const stars of [1,2,3,4,5]) {
+      Object.assign(overlay, { state, level: { stars } });
       P.Overlay.prototype.renderPath.call(overlay, route);
-      assert.equal(attributes.points, `${expectedStart},0.0 1000.0,0.0`);
+      assert.equal(attributes.points, '955.0,0.0 1000.0,0.0');
       assert.equal(outline.points, attributes.points);
     }
   }

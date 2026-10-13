@@ -1,215 +1,117 @@
 'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
 const test = require('node:test');
-
+const assert = require('node:assert/strict');
+const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
 const context = vm.createContext({});
-for (const file of ['config', 'collision', 'grid', 'pathfinding', 'scoring', 'levelGenerator']) {
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/content', `${file}.js`), 'utf8'), context);
-}
+for (const file of ['config','collision','mazeCleanup','mazeRoute','mazeConnectors','mazeGenerator','routeMazeGenerator','levelGenerator'])
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/content', file + '.js'), 'utf8'), context);
 const P = context.__PAGEPATH__;
-const rect = (x, y, width, height) => ({ x, y, width, height });
-const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const reserved = [rect(390, 12, 420, 46)];
-const openPage = { width: 1200, height: 760, rects: [] };
-
-function random(seed) {
-  return () => {
-    seed |= 0;
-    seed = seed + 0x6D2B79F5 | 0;
-    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
+function rng(seed) { return () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function fixture(kind = 'blank', width = 640, height = 480) {
+  const mask = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    mask[y * width + x] = kind === 'solid' ? 1 : kind === 'cards' ? Number(x % 158 < 120 && y % 116 < 84)
+      : kind === 'noise' ? Number(x % 37 < 22 && y % 19 < 12) : 0;
+  }
+  return P.MazeGeometry.rebuild({ width, height, obstacleMask: mask, stats: {} }, [], mask);
+}
+function verify(level, source) {
+  assert.equal(level.nodes.length, 2); assert.equal(level.nodes[0].kind, 'start'); assert.equal(level.nodes[1].kind, 'finish');
+  assert.equal(level.unlimitedInk, true); assert.equal(level.maxInk, Infinity);
+  assert.equal(level.obstacleIndex.walkableMask, level.analysis.walkableMask);
+  assert.ok(Number.isInteger(level.difficulty) && level.difficulty >= 0 && level.difficulty <= 100);
+  assert.equal(level.stars, P.Difficulty.stars(level.difficulty));
+  assert.equal(level.mode, undefined); assert.equal(level.modeLabel, undefined);
+  let measured = 0;
+  for (let i = 0; i < level.referencePath.length; i++) {
+    const p = level.referencePath[i]; assert.equal(P.Collision.pointHits(p, level.obstacleIndex), false);
+    if (i) { const a = level.referencePath[i - 1]; assert.equal(P.Collision.segmentHits(a, p, level.obstacleIndex), false); measured += Math.hypot(a.x-p.x,a.y-p.y); }
+  }
+  assert.ok(Math.abs(measured - level.referenceLength) < 1e-5);
+  const [a,b] = level.nodes;
+  assert.ok(Math.hypot(a.x-b.x,a.y-b.y) > Math.hypot(source.width,source.height)*.3, 'endpoints span the page');
+  assert.ok(measured > Math.hypot(source.width,source.height)*.65, 'a short pocket is not a maze');
+  for (const p of level.nodes) assert.ok(level.analysis.distanceMap[Math.floor(p.y)*source.width+Math.floor(p.x)] >= 12, 'both endpoint icons fit');
+  // Independently remove every reported route portal from the graph. Each one
+  // must disconnect S/T; a cycle or shortcut on the answer fails this audit.
+  const adjacency=level.maze.vertices.map(()=>[]);
+  level.maze.edges.forEach((e,i)=>{adjacency[e.a].push([e.b,i]);adjacency[e.b].push([e.a,i]);});
+  const ids=level.maze.routeVertexIds, start=ids[0], finish=ids.at(-1);
+  for(const removed of level.maze.routeEdgeIds) {
+    const seen=new Set([start]),queue=[start];
+    for(let i=0;i<queue.length;i++)for(const [next,edge]of adjacency[queue[i]])if(edge!==removed&&!seen.has(next)){seen.add(next);queue.push(next);}
+    assert.ok(!seen.has(finish),'all S/T route portals are bridges');
+  }
 }
 
-function verifyPlayable(level, analysis, exclusions = []) {
-  const mode = P.getMode(level.mode);
-  const inkMultiplier = P.getInkMultiplier(level.mode, level.nodes.length);
-  assert.ok(level.nodes.length >= P.Config.MIN_NODES && level.nodes.length <= mode.maxNodes);
-  assert.equal(level.inkMultiplier, inkMultiplier);
-  assert.equal(level.trailLength, mode.trailLength);
-  assert.equal(level.modeLabel, mode.label);
-  assert.ok(Math.abs(level.maxInk / level.referenceLength - inkMultiplier) < 1e-10);
-  const index = P.Collision.createIndex([...analysis.rects, ...exclusions]);
-  let length = 0;
-  for (let i = 1; i < level.referencePath.length; i++) {
-    const a = level.referencePath[i - 1], b = level.referencePath[i];
-    assert.equal(P.Collision.segmentHits(a, b, index, P.Config.PLAYER_RADIUS), false);
-    length += distance(a, b);
-  }
-  for (const [i, node] of level.nodes.entries()) {
-    assert.equal(P.Collision.pointHits(node, index, P.Config.NODE_CLEARANCE), false);
-    assert.ok(level.referencePath.some(point => point.x === node.x && point.y === node.y));
-    for (const other of level.nodes.slice(i + 1)) {
-      assert.ok(distance(node, other) >= P.Config.NODE_MIN_DISTANCE);
-    }
-  }
-  assert.ok(Math.abs(length - level.referenceLength) < 0.001);
-  assert.ok(level.maxInk > length, 'every mode must fund its complete validated reference route');
-  assert.equal(distance(level.referencePath[0], level.nodes[0]), 0);
-  assert.equal(distance(level.referencePath.at(-1), level.nodes.at(-1)), 0);
-  assert.ok(level.difficulty >= 0 && level.difficulty <= 100);
-}
-
-test('萌新, 糕手 and 神仙 retain stable mode IDs, distinct immutable profiles, and a safe default', () => {
-  assert.equal(P.Config.DEFAULT_MODE, 'normal');
-  assert.equal(P.getMode('normal').label, '萌新');
-  assert.equal(P.getMode('normal').targetNodes, 12);
-  assert.equal(P.getMode('normal').maxNodes, 14);
-  assert.equal(P.getMode('normal').inkMultiplier, 1.15);
-  assert.equal(P.getMode('hell').label, '糕手');
-  assert.equal(P.getMode('hell').targetNodes, 16);
-  assert.equal(P.getMode('hell').maxNodes, 18);
-  assert.equal(P.getMode('hell').inkMultiplier, 1.06);
-  assert.equal(P.getMode('hell').inkBaselineNodes, 8);
-  assert.equal(P.getMode('hell').inkPerNode, 0.005);
-  assert.equal(P.getMode('immortal').id, 'immortal');
-  assert.equal(P.getMode('immortal').label, '神仙');
-  assert.equal(P.getMode('immortal').targetNodes, 18);
-  assert.equal(P.getMode('immortal').maxNodes, 20);
-  assert.equal(P.getMode('immortal').inkMultiplier, 1.04);
-  assert.equal(P.getMode('immortal').trailLength, 45);
-  assert.notEqual(P.getMode('immortal'), P.getMode('hell'));
-  assert.equal(P.Config.NORMAL_NODES, P.getMode('normal').targetNodes);
-  assert.equal(P.Config.MAX_NODES, Math.max(...Object.values(P.Config.MODES).map(mode => mode.maxNodes)));
-  assert.equal(P.Config.MAX_INK_MULTIPLIER, 1.15);
-  for (const mode of ['normal', 'hell', 'immortal']) assert.equal(P.getMode(mode).trailLength, 45);
-  for (const value of [P.Config, P.Config.MODES, P.getMode('normal'), P.getMode('hell'), P.getMode('immortal')]) {
-    assert.equal(Object.isFrozen(value), true);
-  }
-  for (const unknown of [undefined, null, '', '__proto__', 'constructor', 'toString', 'IMMORTAL', 'impossible']) {
-    assert.equal(P.getMode(unknown), P.getMode('normal'));
+test('one immutable full-range difficulty replaces the old profiles',()=>{
+  assert.equal(P.Config.MODES,undefined);assert.equal(P.Config.DEFAULT_MODE,undefined);assert.equal(P.getMode,undefined);
+  assert.ok(Object.isFrozen(P.Config.DIFFICULTY));assert.equal(P.Config.DIFFICULTY.min,0);assert.equal(P.Config.DIFFICULTY.max,100);
+  assert.ok(Object.isFrozen(P.Difficulty));
+});
+test('stars follow the measured score with exact inclusive upper boundaries',()=>{
+  for(const [score,stars]of [[0,1],[20,1],[20.0001,2],[40,2],[40.0001,3],[60,3],[60.0001,4],[80,4],[80.0001,5],[100,5],[-10,1],[120,5],[NaN,1]]){
+    assert.equal(P.Difficulty.stars(score),stars, String(score));
   }
 });
-
-test('糕手 ink grows with actual target count while 萌新 and 神仙 keep fixed allowances', () => {
-  const expected = [[4, 1.06], [5, 1.06], [8, 1.06], [12, 1.08], [14, 1.09], [16, 1.1], [17, 1.105], [18, 1.11]];
-  for (const [count, multiplier] of expected) {
-    assert.ok(Math.abs(P.getInkMultiplier('hell', count) - multiplier) < 1e-12, `${count} targets need ${multiplier}x ink`);
+test('page profiles retain all five tiers while busy screenshots favor higher stars',()=>{
+  const profiles = ['blank', 'cards', 'noise', 'solid'].map(kind => P.Difficulty.profile(fixture(kind)));
+  for (const profile of profiles) {
+    assert.ok(profile.pageComplexity >= 0 && profile.pageComplexity <= 1);
+    assert.ok(Object.isFrozen(profile) && Object.isFrozen(profile.probabilities));
+    assert.equal(profile.probabilities.length, 5);
+    assert.ok(Math.abs(profile.probabilities.reduce((sum, chance) => sum + chance, 0) - 1) < 1e-12);
+    for (const chance of profile.probabilities) assert.ok(chance >= .05 - 1e-12);
   }
-  let previous = 1.06;
-  for (let count = 0; count <= 20; count++) {
-    const current = P.getInkMultiplier('hell', count);
-    assert.ok(current >= previous, 'adding a target can never lower the ink allowance');
-    if (count > 8 && count <= 18) assert.ok(Math.abs(current - previous - 0.005) < 1e-12);
-    assert.equal(P.getInkMultiplier('normal', count), 1.15);
-    assert.equal(P.getInkMultiplier('immortal', count), 1.04);
-    previous = current;
-  }
-  assert.equal(P.getInkMultiplier('hell', -100), 1.06);
-  assert.equal(P.getInkMultiplier('hell', Infinity), 1.06);
-  assert.ok(Math.abs(P.getInkMultiplier('hell', 100) - 1.11) < 1e-12, 'caller-supplied counts cannot bypass the mode cap');
-  assert.equal(P.getInkMultiplier('unknown', 16), 1.15);
-});
-
-test('all three revised profiles leave less ink than before for the same complete route', () => {
-  for (let count = P.Config.MIN_NODES; count <= P.Config.MAX_NODES; count++) {
-    assert.ok(P.getInkMultiplier('normal', count) < 1.22);
-    const previousHell = 1.1 + Math.max(0, Math.min(count, 16) - 5) * 0.015;
-    assert.ok(P.getInkMultiplier('hell', count) < previousHell);
-    assert.ok(P.getInkMultiplier('immortal', count) < 1.1);
-    assert.ok(P.getInkMultiplier('normal', count) > P.getInkMultiplier('hell', count));
-    assert.ok(P.getInkMultiplier('hell', count) > P.getInkMultiplier('immortal', count));
+  assert.deepEqual(Array.from(profiles[0].probabilities), [.36, .29, .20, .10, .05]);
+  for (const profile of profiles.slice(1)) {
+    assert.ok(profile.pageComplexity > .5, 'cards, fragmented content and solid foreground are complex');
+    assert.ok(profile.probabilities[4] > profile.probabilities[0]);
+    assert.ok(profile.probabilities[0] < profiles[0].probabilities[0]);
+    assert.ok(profile.probabilities[4] > profiles[0].probabilities[4]);
   }
 });
-
-test('roomy maps place 12–14 萌新, 16–18 糕手, and 18–20 神仙 targets with feasible ink', () => {
-  const pages = [openPage,
-    { width: 1200, height: 760, rects: [rect(400, 250, 400, 240)] },
-    { width: 1200, height: 760, rects: Array.from({ length: 6 }, (_, i) =>
-      rect(100 + i % 3 * 350, 110 + Math.floor(i / 3) * 285, 270, 210)) },
-  ];
-  for (const analysis of pages) for (let seed = 1; seed <= 8; seed++) {
-    const normal = P.LevelGenerator.generate(analysis, reserved, random(seed));
-    verifyPlayable(normal, analysis, reserved);
-    assert.equal(normal.mode, 'normal');
-    assert.ok(normal.nodes.length >= 12 && normal.nodes.length <= 14);
-    let previousCount = normal.nodes.length;
-    for (const mode of ['hell', 'immortal']) {
-      const level = P.LevelGenerator.generate(analysis, reserved, random(seed), mode);
-      verifyPlayable(level, analysis, reserved);
-      assert.equal(level.mode, mode);
-      const inkMultiplier = P.getInkMultiplier(mode, level.nodes.length);
-      assert.equal(level.maxInk, level.referenceLength * inkMultiplier);
-      assert.ok(level.nodes.length >= P.getMode(mode).targetNodes && level.nodes.length <= P.getMode(mode).maxNodes);
-      assert.ok(level.nodes.length > previousCount);
-      previousCount = level.nodes.length;
+test('distributed fragmented content raises complexity at the same foreground area',()=>{
+  const width = 160, height = 120, block = new Uint8Array(width * height), scattered = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    block[y * width + x] = Number(x < 40);
+    scattered[y * width + x] = Number(x % 4 === 0);
+  }
+  const concentrated = P.Difficulty.profile({width, height, obstacleMask:block});
+  const dispersed = P.Difficulty.profile({width, height, obstacleMask:scattered});
+  assert.ok(dispersed.pageComplexity > concentrated.pageComplexity + .25);
+});
+test('drawing a tier reaches every CDF interval and stays within its real score range',()=>{
+  for (const kind of ['blank', 'cards', 'noise', 'solid']) {
+    const source = fixture(kind), profile = P.Difficulty.profile(source);
+    let cumulative = 0;
+    for (let index = 0; index < 5; index++) {
+      for (const jitter of [0, .5, 1]) {
+        const values = [(cumulative + profile.probabilities[index] / 2), jitter];
+        const draw = P.Difficulty.draw(source, () => values.shift());
+        assert.equal(draw.targetStars, index + 1);
+        assert.equal(P.Difficulty.stars(draw.targetDifficulty), draw.targetStars);
+        assert.ok(draw.targetDifficulty >= index * 20 + 6 && draw.targetDifficulty <= index * 20 + 14);
+        assert.equal(draw.intensity, draw.targetDifficulty / 100);
+        assert.equal(draw.pageComplexity, profile.pageComplexity);
+      }
+      cumulative += profile.probabilities[index];
     }
   }
 });
-
-test('Hell and Immortal fall back to the safe available targets on small and narrow pages', () => {
-  const pages = [{ width: 180, height: 180, rects: [] },
-    { width: 800, height: 760, rects: [rect(0, 0, 360, 760), rect(440, 0, 360, 760)] },
-  ];
-  const fallbackCounts = new Set();
-  for (const mode of ['hell', 'immortal']) for (const analysis of pages) for (let seed = 1; seed <= 8; seed++) {
-    const level = P.LevelGenerator.generate(analysis, [], random(seed), mode);
-    verifyPlayable(level, analysis);
-    assert.ok(level.nodes.length < P.getMode(mode).targetNodes);
-    assert.equal(level.mode, mode);
-    if (mode === 'hell') {
-      fallbackCounts.add(level.nodes.length);
-      const expected = 1.06 + Math.max(0, level.nodes.length - 8) * 0.005;
-      assert.ok(Math.abs(level.inkMultiplier - expected) < 1e-12);
-      assert.ok(level.inkMultiplier < P.getInkMultiplier('hell', 16), 'a fallback must use its real count instead of the configured target');
-    }
+test('seeded draws reproduce the same targets without changing the screenshot mask',()=>{
+  const source = fixture('cards'), before = Uint8Array.from(source.obstacleMask);
+  const a = rng(719), b = rng(719), first = P.Difficulty.profile(source);
+  const stars = new Set();
+  for (let i = 0; i < 500; i++) {
+    const left = P.Difficulty.draw(source, a), right = P.Difficulty.draw(source, b);
+    assert.deepEqual(left, right); stars.add(left.targetStars);
   }
-  assert.ok([...fallbackCounts].some(count => count <= 8) && [...fallbackCounts].some(count => count > 8),
-    'small and narrow fixtures exercise both baseline and growing fallback budgets');
+  assert.equal(stars.size, 5);
+  assert.equal(P.Difficulty.profile(source), first, 'reuse the immutable profile for this screenshot');
+  assert.deepEqual(Uint8Array.from(source.obstacleMask), before);
 });
-
-test('mode switches never change any profile or seed reproducibility', () => {
-  const normal = P.LevelGenerator.generate(openPage, reserved, random(842), 'normal');
-  const hell = P.LevelGenerator.generate(openPage, reserved, random(842), 'hell');
-  const immortal = P.LevelGenerator.generate(openPage, reserved, random(842), 'immortal');
-  const normalAgain = P.LevelGenerator.generate(openPage, reserved, random(842), 'normal');
-  const hellAgain = P.LevelGenerator.generate(openPage, reserved, random(842), 'hell');
-  const immortalAgain = P.LevelGenerator.generate(openPage, reserved, random(842), 'immortal');
-  for (const [first, next] of [[normal, normalAgain], [hell, hellAgain], [immortal, immortalAgain]]) {
-    assert.deepEqual(first.nodes, next.nodes);
-    assert.deepEqual(first.referencePath, next.referencePath);
-    assert.equal(first.maxInk, next.maxInk);
-  }
-  const unknown = P.LevelGenerator.generate(openPage, reserved, random(842), 'unknown');
-  assert.equal(unknown.mode, 'normal');
-  assert.deepEqual(unknown.nodes, normal.nodes);
-});
-
-test('the 20-node solver uses bounded work and improves an inefficient visit order', () => {
-  const positions = [0, 19, 1, 18, 2, 17, 3, 16, 4, 15, 5, 14, 6, 13, 7, 12, 8, 11, 9, 10];
-  let reads = 0;
-  const lengths = positions.map(x => new Proxy(positions.map(y => Math.abs(x - y)), {
-    get(target, key) {
-      if (/^\d+$/.test(String(key))) reads++;
-      assert.ok(reads < 500000, 'large routes must avoid exponential subset search');
-      return Reflect.get(target, key);
-    },
-  }));
-  const order = P.Pathfinding.shortestVisitOrder(lengths);
-  assert.equal(new Set(order).size, 20);
-  assert.deepEqual(Array.from(order).sort((a, b) => a - b), Array.from({ length: 20 }, (_, i) => i));
-  const length = order.slice(1).reduce((sum, at, i) => sum + lengths[order[i]][at], 0);
-  assert.equal(length, 19, 'the staggered line should become a single efficient traversal');
-});
-
-test('large 糕手 and 神仙 maps reach their target ranges and remain within the grid cap', () => {
-  const analysis = { width: 3840, height: 2160, rects: [rect(1300, 650, 1200, 800)] };
-  for (const mode of ['hell', 'immortal']) {
-    const level = P.LevelGenerator.generate(analysis, [], random(19), mode);
-    verifyPlayable(level, analysis);
-    assert.ok(level.nodes.length >= P.getMode(mode).targetNodes && level.nodes.length <= P.getMode(mode).maxNodes);
-    assert.ok(level.grid.walkable.length <= P.Config.MAX_GRID_CELLS);
-  }
-});
-
-test('additional targets raise the complexity rating across the new ranges', () => {
-  const grid = { walkableCount: 100, walkable: new Uint8Array(100), narrowRatio: 0 };
-  assert.equal(P.Scoring.difficulty(openPage, grid, 10), 15);
-  assert.equal(P.Scoring.difficulty(openPage, grid, 12), 20);
-  assert.equal(P.Scoring.difficulty(openPage, grid, 16), 30);
-  assert.equal(P.Scoring.difficulty(openPage, grid, 20), 40);
+test('the unified maze works on pages formerly locked out',()=>{
+  const source=fixture(),level=P.LevelGenerator.generate(source,[],rng(20));verify(level,source);assert.ok(level.maze);
 });

@@ -59,7 +59,7 @@
   <script>
     // The layout itself is static and remains usable under script-src 'none'.
     // Only the local browser harness uses this launch helper.
-    const modules = ['config','collision','grid','pathfinding','scoring','levelGenerator','mazeCleanup','mazeRoute','mazeConnectors','routeMazeGenerator','mazeGenerator',
+    const modules = ['config','collision','scoring','progression','mazeCleanup','mazeRoute','mazeConnectors','routeMazeGenerator','mazeGenerator','levelGenerator',
       'opencvRuntime','compactDom','compactMask','imageMapAnalyzer','mapCodec','overlay','pageSnapshot','game'];
     let loaded;
     document.getElementById('launch').onclick = async () => {

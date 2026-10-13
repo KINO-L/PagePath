@@ -7,9 +7,13 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 
-function worker() {
+function worker(storageData = {}, sessionData = {}) {
   const handlers = {}, calls = [], injections = [], captures = [], waits = [], imports = [], analyses = [];
   const hintBatches = [];
+  const storageCalls = [];
+  const backgroundTimers = new Map();
+  let timerId = 0;
+  const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
   const activeTabs = new Map([
     [3, { id: 7, windowId: 3, url: 'https://example.com/article' }],
     [4, { id: 8, windowId: 4, url: 'https://example.com/other' }],
@@ -19,6 +23,21 @@ function worker() {
   const action = Object.fromEntries(['setBadgeText','setBadgeBackgroundColor','setTitle','setPopup','openPopup'].map(method => [method, async data => { calls.push([method, data]); }]));
   const chrome = { action: { ...action, onClicked: { addListener: f => handlers.click = f } },
     runtime: { id: 'pagepath-test', onMessage: { addListener: f => handlers.message = f } },
+    storage: { local: {
+      get: async key => {
+        storageCalls.push(['get', key]);
+        await Promise.resolve();
+        return { [key]: clone(storageData[key]) };
+      },
+      set: async values => {
+        storageCalls.push(['set', clone(values)]);
+        await Promise.resolve();
+        Object.assign(storageData, clone(values));
+      },
+    }, session: {
+      get: async key => ({ [key]: clone(sessionData[key]) }),
+      set: async values => { Object.assign(sessionData, clone(values)); },
+    } },
     tabs: {
       onUpdated: { addListener: f => handlers.update = f },
       onActivated: { addListener: f => handlers.activate = f },
@@ -49,7 +68,9 @@ function worker() {
       analyses.push({ width: pixels.width, height: pixels.height, bounds });
       return { kind: 'pixel-mask' };
     } }, MapCodec: { encode: async analysis => ({ testEncodedMap: analysis.kind }) } };
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'src/content/compactMask.js'), 'utf8'), { __PAGEPATH__: P });
+  for (const file of ['config', 'compactMask', 'scoring', 'progression']) {
+    vm.runInNewContext(fs.readFileSync(path.join(root, `src/content/${file}.js`), 'utf8'), { __PAGEPATH__: P });
+  }
   class Canvas {
     constructor(width, height) { this.width = width; this.height = height; }
     getContext() { return { drawImage() {}, getImageData: () => ({ width: this.width, height: this.height }) }; }
@@ -58,7 +79,13 @@ function worker() {
     chrome, URL, Set, Map, Promise, Date: TestDate, Blob, Uint8Array, atob, TextEncoder,
     __PAGEPATH__: P, importScripts: (...files) => imports.push(...files), OffscreenCanvas: Canvas,
     createImageBitmap: async () => ({ width: 1200, height: 800, close() { calls.push(['closeBitmap']); } }),
-    setTimeout: (callback, delay) => { waits.push(delay); now += delay; callback(); },
+    setTimeout: (callback, delay) => {
+      const id = ++timerId;
+      if (delay >= 10000) backgroundTimers.set(id, callback);
+      else { waits.push(delay); now += delay; callback(); }
+      return id;
+    },
+    clearTimeout: id => backgroundTimers.delete(id),
   });
   function request(sender = {}, message = {}) {
     const origin = { id: chrome.runtime.id, frameId: 0, tab: { ...activeTabs.get(3) },
@@ -67,13 +94,19 @@ function worker() {
       assert.equal(handlers.message({ type: 'PAGEPATH_CAPTURE', bounds: { width: 1200, height: 800, dpr: 1 }, ...message }, origin, resolve), true);
     });
   }
-  return { handlers, calls, injections, captures, waits, activeTabs, chrome, request, imports, analyses, P, hintBatches };
+  return { handlers, calls, injections, captures, waits, activeTabs, chrome, request, imports, analyses, P,
+    hintBatches, storageData, storageCalls, sessionData, backgroundTimers,
+    async runBackgroundTimers() {
+      const pending = [...backgroundTimers.values()]; backgroundTimers.clear();
+      for (const callback of pending) callback();
+      await new Promise(resolve => setImmediate(resolve));
+    } };
 }
 
 test('MV3 package has minimal permissions, local assets, ordered scripts and strict CSP', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8'));
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(manifest.permissions, ['activeTab','scripting']);
+  assert.deepEqual(manifest.permissions, ['activeTab','scripting','storage']);
   assert.equal(manifest.host_permissions, undefined);
   assert.equal(manifest.action.default_popup, undefined);
   assert.equal(manifest.web_accessible_resources, undefined);
@@ -175,10 +208,14 @@ test('toolbar injects locally into the top frame isolated world', async () => {
   for (const file of injections[0].files) assert.ok(fs.existsSync(path.join(root,file)));
   assert.ok(injections[0].files.includes('src/content/mapCodec.js'));
   assert.ok(injections[0].files.includes('src/content/compactDom.js'));
+  assert.equal(injections[0].files[injections[0].files.indexOf('src/content/scoring.js') + 1], 'src/content/progression.js');
+  assert.ok(!injections[0].files.some(file => /obstacleDetector|pageAnalyzer/.test(file)), 'legacy DOM obstacle discovery is no longer injected');
   assert.ok(!injections[0].files.some(file => /opencv|imageMapAnalyzer/i.test(file)), 'webpages receive cached maps, not WASM');
   assert.ok(imports.includes('../vendor/opencv/opencv.js'));
   assert.ok(imports.includes('content/imageMapAnalyzer.js'));
   assert.ok(imports.includes('content/compactMask.js'));
+  assert.ok(imports.includes('content/scoring.js'));
+  assert.ok(imports.includes('content/progression.js'));
   for (const file of imports) assert.ok(fs.existsSync(path.resolve(root, 'src', file)));
   assert.ok(calls.some(([type, data]) => type === 'setBadgeText' && data.text === 'ON'));
 });
@@ -419,4 +456,278 @@ test('snapshot serializes captures across windows and rejects a duplicate pendin
   assert.ok(results.every(result => result.ok));
   assert.equal(captures.length, 2);
   assert.ok(captures[1].time - captures[0].time >= 550);
+});
+
+const PROFILE_KEY = 'pagepath.progress.v3';
+const completion = (runId, difficulty = 40) => ({ type: 'PAGEPATH_COMPLETE', runId,
+  level: { difficulty, challenge: { complexity: difficulty / 100 } },
+  stats: { collectedXp: 0, collectedCount: 0, multiplier: 1 } });
+const profileMessage = { type: 'PAGEPATH_PROFILE' };
+
+test('progression persists across webpages and worker restarts without retaining page data', async () => {
+  const w = worker();
+  const initial = await w.request({}, profileMessage);
+  assert.equal(initial.ok, true);
+  assert.equal(initial.profile.level, 1);
+  assert.equal(initial.profile.totalXp, 0);
+  const message = completion('first-run');
+  const first = await w.request({}, { ...message, score: 999999, xp: 999999 });
+  const expected = w.P.Scoring.calculate(message.level, message.stats);
+  assert.equal(first.ok, true);
+  assert.equal(first.result.score, expected.score, 'worker computes points instead of trusting requested reward');
+  assert.equal(first.result.xp, expected.xp);
+  assert.equal(first.result.awarded, true);
+  assert.equal(first.profile.totalXp, expected.xp);
+  const other = { tab: { id: 8, windowId: 4, url: 'https://another.example/maze' }, url: 'https://another.example/maze' };
+  assert.equal((await w.request(other, profileMessage)).profile.totalXp, expected.xp);
+  const restarted = worker(w.storageData);
+  assert.equal((await restarted.request({}, profileMessage)).profile.totalXp, expected.xp);
+  assert.ok(w.storageData[PROFILE_KEY]);
+  assert.deepEqual(Object.keys(w.storageData), [PROFILE_KEY]);
+  assert.ok(!JSON.stringify(w.storageData).includes('https://'));
+  assert.ok(!JSON.stringify(w.storageData).includes('data:image'));
+});
+
+test('simultaneous completions in different tabs accumulate every reward exactly once', async () => {
+  const w = worker();
+  const requests = Array.from({ length: 20 }, (_, i) => {
+    const sender = i % 2 ? { tab: { ...w.activeTabs.get(4) }, url: w.activeTabs.get(4).url } : {};
+    const message = completion(`parallel-${i}`, i * 5);
+    return { sender, message, expected: w.P.Scoring.calculate(message.level, message.stats) };
+  });
+  const results = await Promise.all(requests.map(({ sender, message }) => w.request(sender, message)));
+  assert.ok(results.every(result => result.ok && result.result.awarded));
+  const view = (await w.request({}, profileMessage)).profile;
+  assert.equal(view.wins, 20);
+  assert.equal(view.totalXp, requests.reduce((sum, item) => sum + item.expected.xp, 0));
+  assert.equal(view.totalScore, requests.reduce((sum, item) => sum + item.expected.score, 0));
+  assert.equal(w.storageData[PROFILE_KEY].recentRuns.length, 20);
+});
+
+test('settlement accepts the full difficulty range without a mode and retains legacy receipt compatibility', async () => {
+  const w = worker();
+  for (const difficulty of [0, 20, 50, 80, 100]) {
+    const message = completion(`difficulty-${difficulty}`, difficulty);
+    const result = await w.request({}, message);
+    assert.equal(result.ok, true);
+    assert.equal(result.result.scoringDifficulty, difficulty);
+    assert.ok(result.result.xp > 0);
+  }
+  const legacy = completion('without-complexity');
+  delete legacy.level.challenge.complexity;
+  const result = await w.request({}, legacy);
+  assert.equal(result.ok, true);
+  assert.equal(result.result.scoringDifficulty, legacy.level.difficulty);
+});
+
+test('worker awards collection XP and one multiplier without changing the difficulty score', async () => {
+  const w = worker(), plain = completion('plain', 65), collected = completion('collected', 65);
+  collected.stats = { collectedXp: 70, collectedCount: 3, multiplier: 5 };
+  const a = await w.request({}, plain), b = await w.request({}, collected);
+  assert.equal(a.result.score, 1900);
+  assert.equal(b.result.score, a.result.score);
+  assert.equal(b.result.baseXp, 190);
+  assert.equal(b.result.xp, (190 + 70) * 5);
+  assert.equal(b.profile.totalXp, a.result.xp + b.result.xp);
+  for (const key of ['grade', 'efficiency', 'elapsedMs', 'targetTimeMs', 'distance', 'failures']) assert.equal(b.result[key], undefined);
+});
+
+test('duplicate completions are deduplicated while pending and after a worker restart', async () => {
+  const w = worker(), message = completion('shared-run', 75);
+  const results = await Promise.all(Array.from({ length: 8 }, () => w.request({}, message)));
+  assert.ok(results.every(result => result.ok));
+  assert.equal(results.filter(result => result.result.awarded).length, 1);
+  assert.equal(results.reduce((total, result) => total + result.result.xp, 0), w.P.Scoring.calculate(message.level, message.stats).xp);
+  const restarted = worker(w.storageData);
+  const repeated = await restarted.request({}, message);
+  assert.equal(repeated.ok, true);
+  assert.equal(repeated.result.xp, 0);
+  assert.equal(repeated.result.awarded, false);
+  assert.equal(repeated.profile.wins, 1);
+});
+
+test('legacy local progress keeps XP and deduplication while dropping mode groups on the next save', async () => {
+  const legacy = { version: 1, totalXp: 720, totalScore: 7200, totalRuns: 7, bestScore: 1700,
+    modeBests: { normal: 1900, hell: 2300 },
+    recentRuns: [{ id: 'already-won', mode: 'hell', difficulty: 75, score: 2300, xp: 230, elapsedMs: 50000 }] };
+  const w = worker({ [PROFILE_KEY]: legacy });
+  const loaded = await w.request({}, profileMessage);
+  assert.equal(loaded.profile.totalXp, 720);
+  assert.equal(loaded.profile.bestScore, 2300);
+  const duplicate = await w.request({}, completion('already-won'));
+  assert.equal(duplicate.result.awarded, false);
+  assert.equal(duplicate.result.xp, 0);
+  const next = await w.request({}, completion('new-win'));
+  assert.equal(next.profile.totalXp, 720 + next.result.xp);
+  assert.equal(next.profile.wins, 8);
+  const saved = w.storageData[PROFILE_KEY];
+  assert.equal(saved.version, 3);
+  assert.equal(saved.modeBests, undefined);
+  assert.ok(saved.recentRuns.every(run => !Object.hasOwn(run, 'mode')));
+  assert.ok(saved.recentRuns.every(run => !Object.hasOwn(run, 'elapsedMs')));
+  assert.equal(saved.recentRuns[0].id, 'already-won');
+});
+
+test('a transient storage failure automatically retries the received receipt before responding', async () => {
+  const w = worker(), set = w.chrome.storage.local.set;
+  let attempts = 0;
+  w.chrome.storage.local.set = async values => {
+    if (++attempts === 1) throw new Error('temporary storage failure');
+    return set(values);
+  };
+  const result = await w.request({}, completion('automatic-retry'));
+  assert.equal(result.ok, true);
+  assert.equal(result.profile.wins, 1);
+  assert.equal(attempts, 2);
+  assert.ok(w.waits.includes(250));
+  assert.equal(result.profileData.recentRuns[0].id, 'automatic-retry');
+  assert.equal(result.profileData.totalXp, result.profile.totalXp);
+});
+
+test('receipts survive exhausted retries and the next profile request completes them without the game', async () => {
+  const w = worker(), set = w.chrome.storage.local.set;
+  w.chrome.storage.local.set = async () => { throw new Error('private storage implementation detail'); };
+  const first = await w.request({}, completion('retry-this-run'));
+  assert.equal(first.ok, false);
+  assert.ok(!String(first.error).includes('private'));
+  assert.equal(w.storageData[PROFILE_KEY], undefined);
+  assert.equal(w.sessionData['pagepath.pending.v3'][0].runId, 'retry-this-run');
+  w.chrome.storage.local.set = set;
+  const recovered = await w.request({}, profileMessage);
+  assert.equal(recovered.profile.wins, 1, 'no further completion message from the closed game is needed');
+  const retry = await w.request({}, completion('retry-this-run'));
+  assert.equal(retry.ok, true);
+  assert.equal(retry.result.awarded, false);
+  assert.equal(retry.result.xp, 0);
+  assert.equal(retry.profile.wins, 1);
+  const next = await w.request({}, completion('next-run'));
+  assert.equal(next.ok, true);
+  assert.equal(next.profile.wins, 2);
+});
+
+test('background retry credits a closed game after local storage recovers without any new requests', async () => {
+  const w = worker(), set = w.chrome.storage.local.set, message = completion('closed-game');
+  w.chrome.storage.local.set = async () => { throw new Error('temporary local storage outage'); };
+  assert.equal((await w.request({}, message)).ok, false);
+  assert.equal(w.backgroundTimers.size, 1);
+  w.chrome.storage.local.set = set;
+  await w.runBackgroundTimers();
+  assert.equal(w.storageData[PROFILE_KEY].totalXp, w.P.Scoring.calculate(message.level, message.stats).xp);
+  assert.equal(w.storageData[PROFILE_KEY].totalRuns, 1);
+  assert.equal(w.sessionData['pagepath.pending.v3'].length, 0);
+  assert.equal(w.backgroundTimers.size, 0);
+});
+
+test('worker restart restores unconfirmed session receipts and credits each only once', async () => {
+  const w = worker(), message = completion('before-worker-suspension', 60);
+  w.chrome.storage.local.set = async () => { throw new Error('storage temporarily unavailable'); };
+  assert.equal((await w.request({}, message)).ok, false);
+  w.backgroundTimers.clear(); // Simulate suspension: only browser storage survives.
+  const restarted = worker(w.storageData, w.sessionData);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(restarted.backgroundTimers.size, 1);
+  await restarted.runBackgroundTimers();
+  assert.equal(restarted.storageData[PROFILE_KEY].totalRuns, 1);
+  assert.equal(restarted.sessionData['pagepath.pending.v3'].length, 0);
+  const duplicate = await restarted.request({}, message);
+  assert.equal(duplicate.result.xp, 0);
+  assert.equal(duplicate.profile.wins, 1);
+});
+
+test('legacy queued receipts migrate to base XP without retaining old timing or route telemetry', async () => {
+  const legacy = { type: 'PAGEPATH_COMPLETE', runId: 'old-unconfirmed',
+    level: { difficulty: 80, referenceLength: 1234, challenge: { complexity: 0.5, turns: 8, deadEnds: 12 } },
+    stats: { elapsedMs: 50000, distance: 5678, failures: 15 } };
+  const w = worker({}, { 'pagepath.pending.v3': [legacy] });
+  const set = w.chrome.storage.local.set;
+  w.chrome.storage.local.set = async () => { throw new Error('wait for local storage'); };
+  assert.equal((await w.request({}, legacy)).ok, false);
+  const queued = w.sessionData['pagepath.pending.v3'][0];
+  // An already restored receipt is normalized before its next session mirror.
+  const another = completion('new-unconfirmed');
+  assert.equal((await w.request({}, another)).ok, false);
+  const migrated = w.sessionData['pagepath.pending.v3'].find(receipt => receipt.runId === legacy.runId);
+  assert.deepEqual(migrated.stats, { collectedXp: 0, collectedCount: 0, multiplier: 1 });
+  assert.deepEqual(migrated.level, { difficulty: 80, challenge: { complexity: 0.5 } });
+  assert.equal(queued.runId, legacy.runId);
+  w.chrome.storage.local.set = set;
+  const loaded = await w.request({}, profileMessage);
+  assert.equal(loaded.profile.totalXp, 160 + w.P.Scoring.calculate(another.level, another.stats).xp);
+  assert.equal(loaded.profile.wins, 2);
+  const duplicate = await w.request({}, legacy);
+  assert.equal(duplicate.result.xp, 0);
+  assert.equal(duplicate.profile.wins, 2);
+});
+
+test('a temporarily unreadable session queue is not overwritten before old receipts can be merged', async () => {
+  const old = completion('previous-worker'), current = completion('current-worker', 65);
+  const w = worker({}, { 'pagepath.pending.v3': [old] }), get = w.chrome.storage.session.get;
+  w.chrome.storage.session.get = async () => { throw new Error('session read temporarily unavailable'); };
+  const fresh = await w.request({}, current);
+  assert.equal(fresh.ok, true, 'new local persistence can proceed independently');
+  assert.equal(w.sessionData['pagepath.pending.v3'].length, 1);
+  assert.equal(w.sessionData['pagepath.pending.v3'][0].runId, old.runId);
+  w.chrome.storage.session.get = get;
+  const merged = await w.request({}, profileMessage);
+  assert.equal(merged.profile.wins, 2);
+  assert.equal(merged.profile.totalXp, w.P.Scoring.calculate(old.level, old.stats).xp + fresh.result.xp);
+  assert.equal(w.sessionData['pagepath.pending.v3'].length, 0);
+});
+
+test('a profile read failure is contained and a later request can recover', async () => {
+  const w = worker(), get = w.chrome.storage.local.get;
+  w.chrome.storage.local.get = async () => { throw new Error('private storage detail'); };
+  const first = await w.request({}, profileMessage);
+  assert.equal(first.ok, false);
+  assert.ok(!String(first.error).includes('private'));
+  w.chrome.storage.local.get = get;
+  assert.equal((await w.request({}, profileMessage)).ok, true);
+  assert.equal((await w.request({}, completion('after-read-error'))).ok, true);
+});
+
+test('progression messages reject unrelated extensions, subframes and unsupported pages before storage access', async () => {
+  for (const sender of [
+    { id: 'other-extension' }, { frameId: 1 }, { frameId: undefined }, { tab: undefined },
+    { tab: { id: -1, windowId: 3 } }, { url: 'chrome://settings' },
+    { url: 'https://chromewebstore.google.com/detail/id' },
+  ]) {
+    for (const message of [profileMessage, completion('invalid-sender')]) {
+      const w = worker();
+      const result = await w.request(sender, message);
+      assert.equal(result.ok, false);
+      assert.equal(w.storageCalls.length, 0);
+    }
+  }
+});
+
+test('invalid settlement metrics and difficulty ranges never grant profile rewards', async () => {
+  const base = completion('valid-id');
+  const invalid = [
+    { runId: '' }, { runId: 'x'.repeat(200) }, { runId: 'path/invalid' },
+    { level: null }, { stats: null },
+    { level: { ...base.level, difficulty: -0.01 } },
+    { level: { ...base.level, difficulty: 100.01 } },
+    { level: { ...base.level, difficulty: '40' } },
+    { level: { ...base.level, difficulty: Infinity } },
+    ...[-0.01, 1.01, NaN, Infinity, null, '0.5'].map(complexity => ({
+      level: { ...base.level, challenge: { ...base.level.challenge, complexity } },
+    })),
+    { stats: { collectedXp: 10 } },
+    { stats: { ...base.stats, collectedCount: 11 } },
+    { stats: { ...base.stats, collectedCount: -1 } },
+    { stats: { ...base.stats, collectedCount: 1.5 } },
+    { stats: { ...base.stats, collectedXp: -10 } },
+    { stats: { ...base.stats, collectedXp: Infinity } },
+    { stats: { ...base.stats, collectedXp: 410, collectedCount: 10 } },
+    { stats: { ...base.stats, collectedXp: 30, collectedCount: 1 } },
+    { stats: { ...base.stats, collectedXp: 35, collectedCount: 2 } },
+    ...[0, 4, 6, 7, 9, '2', Infinity].map(multiplier => ({ stats: { ...base.stats, multiplier } })),
+  ];
+  const w = worker();
+  for (const override of invalid) {
+    const result = await w.request({}, { ...base, ...override });
+    assert.equal(result.ok, false, JSON.stringify(override));
+  }
+  assert.equal(w.storageData[PROFILE_KEY], undefined);
+  assert.equal((await w.request({}, profileMessage)).profile.wins, 0);
 });

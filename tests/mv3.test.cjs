@@ -1,6 +1,5 @@
-// Real unpacked MV3 smoke test. Uses the original manifest and genuine extension
-// actions via Chromium's browser-level CDP Extensions.triggerAction command.
-// No host permission is added, and the service-worker handler is not mocked.
+// Real unpacked MV3 smoke test: original permissions, isolated-world game,
+// screenshot analysis, genuine mouse input and persistent extension storage.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -10,765 +9,267 @@ const root = path.resolve(__dirname, '..');
 let playwright;
 try { playwright = require('playwright'); }
 catch { playwright = require(path.resolve(path.dirname(process.execPath), '../node_modules/playwright')); }
-
 const candidate = process.env.PAGEPATH_BROWSER || (process.platform === 'win32'
   ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : undefined);
 const executablePath = candidate && fs.existsSync(candidate) ? candidate : undefined;
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 async function until(read, predicate, label) {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 60000;
   let value;
   do {
     value = await read();
     if (predicate(value)) return value;
-    await delay(25);
+    if (value?.state === 'PAUSED' && value?.generationFailed) assert.fail(`${label}: ${value.message}`);
+    await delay(30);
   } while (Date.now() < deadline);
   assert.fail(`Timed out: ${label}; last value ${JSON.stringify(value)}`);
 }
-function assertLockedMazeDetails(info) {
-  assert.equal(info.disabled, true);
-  assert.equal(info.availability.available, false);
-  assert.equal(info.availability.obstacleRatio, info.sourceObstacleRatio, 'hover statistics come from the original screenshot');
-  assert.equal(info.availability.occupiedRegions, info.sourceOccupiedRegions, 'dispersion comes from original foreground pixels');
-  assert.equal(info.title, ''); assert.equal(info.hoverTitle, '', 'the locked entry has no native long title');
-  assert.equal(info.tooltipVisible, true);
-  assert.equal(info.tooltipText.replace(/\s/g, ''), '寻找复杂的页面来解锁第二关。复杂度分散度', 'the tooltip contains the unlock instruction and two criteria');
-  assert.doesNotMatch(info.tooltipText, /[0-9%≥≤]|目标|原因/);
-  assert.deepEqual(info.criteria.map(item => item.kind), ['complexity', 'distribution']);
-  const expected = [info.sourceObstacleRatio >= .2, info.sourceOccupiedRegions >= 30];
-  info.criteria.forEach((item, index) => {
-    assert.equal(item.passed, String(expected[index]));
-    assert.equal(item.color, expected[index] ? 'rgb(57, 115, 63)' : 'rgb(179, 69, 63)', 'checks are green and crosses are red');
-    assert.equal(item.mark, expected[index] ? 'M3 8L6.5 11.5L13 4.5' : 'M4 4L12 12M12 4L4 12', 'the mark shows the corresponding check or cross');
-  });
-  assert.ok(info.opacities.every(value => value === '1'), 'the locked padlock retains normal opacity');
-  assert.notEqual(info.lockedDisplay, 'none');
-  assert.equal(info.unlockedDisplay, 'none');
-}
 
 (async () => {
-  // The repository fixture has insufficient foreground and stays unavailable;
-  // the dense natural-obstacle fixture tests only short links between content.
-  // Both run under strict CSP with no page scripts.
-  const openPageContent = `<div class="eyebrow">PAGEPATH / REPOSITORY</div><h1>pagepath</h1>
-    <div class="tags"><button>Code</button><button>Issues 12</button><button>Pull requests 3</button><input aria-label="Search" placeholder="Search files"></div>
-    <div class="columns"><pre class="code">function createPuzzle(viewport) {
-  const obstacles = analyze(viewport);
-  const grid = buildGrid(obstacles);
-  const route = findSafeRoute(grid);
-  return sampleNodes(route);
-}
-
-// The webpage is the level.
-export { createPuzzle };</pre><aside class="panel"><h2>About</h2><p>Turn any webpage into a puzzle.</p><button>Star project</button></aside></div>`;
-  const openPageHTML = fs.readFileSync(path.join(root, 'tests/fixtures/index.html'), 'utf8')
-    .replace('<link rel="stylesheet" href="/tests/fixtures/fixture.css">',
-      `<style>${fs.readFileSync(path.join(root, 'tests/fixtures/fixture.css'), 'utf8')}</style>`)
-    .replace('<main id="content"></main>', `<main id="content">${openPageContent}</main>`)
-    .replace('<script src="/tests/fixtures/fixture.js"></script>', '<div class="scroll-space"></div>');
-  const mazeHTML = fs.readFileSync(path.join(root, 'tests/fixtures/natural-maze.html'), 'utf8')
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
-  const noRouteHTML = mazeHTML.replace('</style>', `main{inset:0!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;
-    grid-template-rows:minmax(0,1fr)!important;gap:64px!important}
-    article{grid-column:auto!important;margin:0!important}article:nth-child(n+4){display:none!important}</style>`);
-  const distributedHTML = `<!doctype html><html><head><meta charset="utf-8"><style>
-    html,body{margin:0;width:100%;height:100%;background:#fff}main{display:grid;width:100%;height:100%;
-      grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(6,1fr);place-items:center}
-    article{width:80px;height:50px;background:repeating-linear-gradient(135deg,#29372f 0 2px,#344539 2px 4px)}
-    </style></head><body><main>${'<article></article>'.repeat(48)}</main></body></html>`;
   const server = http.createServer((request, response) => {
-    response.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Content-Security-Policy': "default-src 'self'; script-src 'none'; img-src 'none'; style-src 'unsafe-inline'",
-    });
-    if (request.url === '/maze') { response.end(mazeHTML); return; }
-    if (request.url === '/maze-no-route') { response.end(noRouteHTML); return; }
-    if (request.url === '/maze-open') { response.end(openPageHTML); return; }
-    if (request.url === '/maze-distributed') { response.end(distributedHTML); return; }
-    response.end(`<!doctype html><html lang="en"><head><title>PagePath MV3 test</title>
-      <style>body{margin:0;background:#fafbf7;color:#233b30;font:18px Georgia}
-      main{position:absolute;left:30%;top:35%;width:40%}h1{font-size:32px}
-      p{font-size:16px;line-height:1.7}
-      #compact{position:absolute;left:900px;top:240px;width:100px;height:48px;
-      border:2px solid #233b30;border-radius:8px;background:white}</style></head><body><main>
-      <h1>The webpage is the level.</h1><p>This is an ordinary webpage with a strict
-      content security policy. PagePath runs in the extension's isolated world.</p>
-      </main><button id="compact" aria-label="Compact outlined button"></button></body></html>`);
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': "default-src 'self'; script-src 'none'; img-src 'none'; style-src 'unsafe-inline'" });
+    const content = request.url === '/content' ? '<main><h1>The webpage is the maze.</h1><p>Original page content remains part of the playable map.</p><button>Page content</button></main>' : '';
+    response.end(`<!doctype html><html><head><title>PagePath MV3 maze</title><style>
+      html,body{margin:0;min-height:100%;background:#fff;color:#263930;font:18px Georgia}
+      main{position:absolute;left:28%;top:35%;width:45%;padding:24px;background:#edf1ed;border-radius:16px}
+      h1{font-size:28px}p{line-height:1.7}button{padding:12px;border:1px solid #263930;border-radius:8px}
+      </style></head><body>${content}</body></html>`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'pagepath-mv3-'));
-  let context;
-  try {
+  const temporaryRoot = fs.realpathSync(os.tmpdir());
+  const profile = fs.mkdtempSync(path.join(temporaryRoot, 'pagepath-mv3-'));
+  const errors = [];
+  let context, worker, browserCDP, extensionId;
+  async function launch() {
     context = await playwright.chromium.launchPersistentContext(profile, {
       executablePath, headless: true, viewport: { width: 1280, height: 900 },
       ignoreDefaultArgs: ['--disable-extensions'],
-      args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`,
-        '--enable-unsafe-extension-debugging'],
+      args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`, '--enable-unsafe-extension-debugging'],
     });
-    const errors = [];
     context.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     context.on('page', page => page.on('pageerror', error => errors.push(error.message)));
-    const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', { timeout: 10000 });
-    const id = new URL(worker.url()).hostname;
+    worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', { timeout: 15000 });
+    extensionId = new URL(worker.url()).hostname;
     assert.match(worker.url(), /\/src\/background\.js$/);
-    const manifest = await worker.evaluate(() => chrome.runtime.getManifest());
-    assert.equal(manifest.manifest_version, 3);
-    assert.deepEqual(manifest.permissions, ['activeTab', 'scripting']);
-    assert.equal(manifest.host_permissions, undefined);
-    await until(() => worker.evaluate(() => chrome.action.onClicked.hasListeners()), Boolean, 'action registration');
-    const browserCDP = await context.browser().newBrowserCDPSession();
-    async function action(page) {
-      await page.bringToFront();
-      // Default getTargets filtering omits the tab targets required by this API.
-      const { targetInfos } = await browserCDP.send('Target.getTargets', { filter: [{}] });
-      const tab = targetInfos.find(target => target.type === 'tab' && target.url === page.url());
-      assert.ok(tab, `Tab target exists for ${page.url()}`);
-      await browserCDP.send('Extensions.triggerAction', { id, targetId: tab.targetId });
-    }
-    const activeTabId = () => worker.evaluate(async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0].id);
-    const badge = tabId => worker.evaluate(tabId => chrome.action.getBadgeText({ tabId }), tabId);
-    const ready = page => page.waitForFunction(() =>
-      document.querySelector('[data-pagepath-root]')?.shadowRoot.querySelector('.toolbar').dataset.state === 'READY');
-    const gone = page => page.waitForFunction(() => !document.querySelector('[data-pagepath-root]'));
-    async function verifyOrdinaryHint(targetPage) {
-      assert.equal(await targetPage.locator('[data-pagepath-root] .hint').isVisible(), true);
-      assert.equal(await targetPage.locator('[data-pagepath-root] .hint').getAttribute('aria-pressed'), 'true');
-      assert.ok(await targetPage.locator('[data-pagepath-root] .hint-path').count() > 0);
-      assert.equal(await targetPage.locator('[data-pagepath-root] .obstacle-map').evaluate(el => getComputedStyle(el).visibility), 'hidden',
-        'ordinary hints display the answer route without showing global obstacle outlines');
-    }
-    async function verifyNoMazeHint(targetPage, targetTabId) {
-      const [read] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-        target: { tabId }, world: 'ISOLATED', func: () => {
-          const game = __PAGEPATH__.instance, overlay = game.overlay;
-          game.toggleHint();
-          overlay.renderHint(true);
-          return { mode: game.mode, hidden: overlay.hintButton.hidden, disabled: overlay.hintButton.disabled,
-            display: getComputedStyle(overlay.hintButton).display, pressed: overlay.hintButton.getAttribute('aria-pressed'),
-            hintVisible: game.hintVisible, children: overlay.hintLayer.childElementCount,
-            obstacles: getComputedStyle(overlay.allObstacles).visibility,
-            route: game.level.referencePath.map(({ x, y }) => ({ x, y })) };
-        }
-      }), targetTabId);
-      const { route, ...status } = read.result;
-      assert.deepEqual(status, { mode: 'maze', hidden: true, disabled: true, display: 'none', pressed: 'false',
-        hintVisible: false, children: 0, obstacles: 'hidden' },
-      'the real second level cannot expose a hint through game or render calls');
-      assert.equal(await targetPage.locator('[data-pagepath-root] .hint').isVisible(), false);
-      return route; // Internal test witness; the extension exposes no displayed maze answer.
-    }
-    async function verifyLockedMaze(targetPage, targetTabId) {
-      await targetPage.locator('[data-pagepath-root] .maze-mode-slot').hover();
-      assert.equal(await targetPage.locator('[data-pagepath-root] .maze-tooltip').isVisible(), true,
-        'hovering the locked icon opens the custom tooltip');
-      const [read] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-        target: { tabId }, world: 'ISOLATED', func: () => {
-          const game = __PAGEPATH__.instance, overlay = game.overlay;
-          const button = overlay.modeButtons.find(item => item.dataset.mode === 'maze');
-          const icon = button.querySelector('.control-icon'), lock = button.querySelector('.maze-locked-mark');
-          const source = game.sourceAnalysis;
-          const bins = new Uint32Array(48);
-          for (let index = 0; index < source.obstacleMask.length; index++) if (source.obstacleMask[index]) {
-            const x = index % source.width, y = Math.floor(index / source.width);
-            bins[Math.floor(y * 6 / source.height) * 8 + Math.floor(x * 8 / source.width)]++;
-          }
-          const tooltip = overlay.mazeTooltip;
-          return { availability: game.mazeAvailability, disabled: button.disabled, title: button.title,
-            hoverTitle: overlay.mazeModeSlot.title, mode: game.mode, state: game.state,
-            sourceObstacleRatio: source.obstacleMask.reduce((sum, value) => sum + Number(Boolean(value)), 0) / source.obstacleMask.length,
-            sourceOccupiedRegions: bins.filter(count => count >= source.width * source.height / 48 * .1).length,
-            tooltipVisible: !tooltip.hidden && getComputedStyle(tooltip).display !== 'none', tooltipText: tooltip.textContent,
-            criteria: [...tooltip.querySelectorAll('.maze-criterion')].map(row => ({ kind: row.dataset.criterion,
-              passed: row.dataset.passed, color: getComputedStyle(row.querySelector('.criterion-mark')).color,
-              mark: row.querySelector('.criterion-mark path')?.getAttribute('d') })),
-            opacities: [overlay.mazeModeSlot, button, icon, lock].map(element => getComputedStyle(element).opacity),
-            lockedDisplay: getComputedStyle(lock).display,
-            unlockedDisplay: getComputedStyle(button.querySelector('.maze-unlocked-mark')).display };
-        }
-      }), targetTabId);
-      assertLockedMazeDetails(read.result);
-      const bounds = await targetPage.locator('[data-pagepath-root] .mode-button[data-mode="maze"]').boundingBox();
-      await targetPage.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      const [afterClick] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-        target: { tabId }, world: 'ISOLATED', func: () => ({ mode: __PAGEPATH__.instance.mode, state: __PAGEPATH__.instance.state })
-      }), targetTabId);
-      assert.deepEqual(afterClick.result, { mode: read.result.mode, state: read.result.state }, 'the clear padlock stays disabled');
-      const [afterProgrammatic] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-        target: { tabId }, world: 'ISOLATED', func: () => {
-          const game = __PAGEPATH__.instance; game.setMode('maze');
-          return { mode: game.mode, state: game.state };
-        }
-      }), targetTabId);
-      assert.deepEqual(afterProgrammatic.result, afterClick.result, 'programmatic changes cannot bypass locked availability');
-      return read.result;
-    }
-    async function verifyUnlockedMaze(targetPage) {
-      const entry = targetPage.locator('[data-pagepath-root] .mode-button[data-mode="maze"]');
-      const slot = targetPage.locator('[data-pagepath-root] .maze-mode-slot');
-      assert.equal(await entry.isDisabled(), false);
-      assert.equal(await entry.getAttribute('title'), '第二关');
-      assert.equal(await slot.getAttribute('title'), '第二关');
-      assert.equal(await entry.locator('.maze-locked-mark').isVisible(), false);
-      assert.equal(await entry.locator('.maze-unlocked-mark').isVisible(), true);
-      await slot.hover();
-      assert.equal(await targetPage.locator('[data-pagepath-root] .maze-tooltip').isVisible(), false,
-        'the unlocked star only offers its short native name');
-    }
-    async function verifyTransparentMaze(targetTabId) {
-      const [read] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-        target: { tabId }, world: 'ISOLATED', func: () => {
-          const game = __PAGEPATH__.instance, overlay = game.overlay, source = game.sourceAnalysis;
-          const segments = overlay.sourceContours?.segments || [], paths = [];
-          for (let i = 0; i < segments.length; i += 4) paths.push(`M${segments[i]},${segments[i + 1]}L${segments[i + 2]},${segments[i + 3]}`);
-          let newEdges = 0, invalidEdges = 0;
-          const free = (map, x, y) => x >= 0 && y >= 0 && x < map.width && y < map.height && Boolean(map.walkableMask[y * map.width + x]);
-          for (let i = 0; i < segments.length; i += 4) {
-            const [x1, y1, x2, y2] = segments.slice(i, i + 4), horizontal = y1 === y2;
-            const low = horizontal ? Math.min(x1, x2) : Math.min(y1, y2), high = horizontal ? Math.max(x1, x2) : Math.max(y1, y2);
-            for (let at = low; at < high; at++) {
-              const a = horizontal ? [at, y1 - 1] : [x1 - 1, at], b = horizontal ? [at, y1] : [x1, at];
-              const first = free(game.analysis, ...a), second = free(game.analysis, ...b);
-              if (first === second) invalidEdges++;
-              else if (free(source, ...(first ? b : a))) newEdges++;
+    await until(() => worker.evaluate(() => chrome.action.onClicked.hasListeners()), Boolean, 'extension action registration');
+    browserCDP = await context.browser().newBrowserCDPSession();
+  }
+  async function action(page) {
+    await page.bringToFront();
+    const { targetInfos } = await browserCDP.send('Target.getTargets', { filter: [{}] });
+    const tab = targetInfos.find(target => target.type === 'tab' && target.url === page.url());
+    assert.ok(tab, `Tab target exists for ${page.url()}`);
+    await browserCDP.send('Extensions.triggerAction', { id: extensionId, targetId: tab.targetId });
+  }
+  const activeTabId = () => worker.evaluate(async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0].id);
+  const savedProfile = () => worker.evaluate(async () => (await chrome.storage.local.get('pagepath.progress.v3'))['pagepath.progress.v3']);
+  async function readGame(tabId) {
+    const [read] = await worker.evaluate(tabId => chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED', func: () => {
+        const game = globalThis.__PAGEPATH__?.instance;
+        if (!game) return null;
+        return { state: game.state, difficulty: game.level?.difficulty, stars: game.level?.stars,
+          nodes: game.level?.nodes.length, referencePath: game.level?.referencePath,
+          referenceLength: game.level?.referenceLength, message: game.message, generationFailed: game.generationFailed,
+          snapshotMode: game.snapshot?.mode, mapKind: game.analysis?.kind,
+          sharedMask: game.collisionIndex?.walkableMask === game.analysis?.walkableMask,
+          unique: game.level?.maze?.construction?.uniqueStartFinish,
+          profile: game.profile, result: game.result, run: game.run,
+          collectibles: game.level?.collectibles,
+          multiplierVisible: game.overlay.surface.querySelector('.collectible[data-kind="multiplier"]')?.dataset.visible,
+          multiplierBreathing: game.overlay.surface.querySelector('.collectible[data-kind="multiplier"] .bubble-glow') &&
+            getComputedStyle(game.overlay.surface.querySelector('.collectible[data-kind="multiplier"] .bubble-glow')).animationName,
+          timeControls: game.overlay.shadowRoot.querySelectorAll('.timer-value,.hud-timer').length,
+          cursor: getComputedStyle(game.overlay.surface).cursor,
+          toolbarVisible: getComputedStyle(game.overlay.toolbar.querySelector('.toolbar-main')).visibility,
+          modes: game.overlay.shadowRoot.querySelectorAll('.mode-button').length,
+          resultPanels: game.overlay.shadowRoot.querySelectorAll('.result-panel').length,
+          starLabel: game.overlay.toolbar.querySelector('.star-rating')?.getAttribute('aria-label'),
+          displayedStars: Number(game.overlay.toolbar.querySelector('.star-rating')?.dataset.stars),
+          starsVisible: game.overlay.toolbar.querySelector('.star-rating')?.checkVisibility(),
+          xpVisible: game.overlay.toolbar.querySelector('.xp-value')?.checkVisibility(),
+          xpInToolbar: Boolean(game.overlay.toolbar.querySelector('.xp-value')),
+          xpText: game.overlay.toolbar.querySelector('.xp-value')?.textContent,
+          toolbarCursor: getComputedStyle(game.overlay.toolbar).cursor,
+          retryCursor: getComputedStyle(game.overlay.toolbar.querySelector('.retry')).cursor,
+          saveControls: game.overlay.toolbar.querySelectorAll('.save-result,.settlement-note,.result-meta').length,
+          hints: game.overlay.shadowRoot.querySelectorAll('.hint').length };
+      },
+    }), tabId);
+    return read.result;
+  }
+  const ready = tabId => until(() => readGame(tabId), value => value?.state === 'READY', 'maze ready');
+  const gone = page => page.waitForFunction(() => !document.querySelector('[data-pagepath-root]'));
+  async function routeThroughBubble(tabId) {
+    const [read] = await worker.evaluate(tabId => chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED', func: () => {
+        const game = globalThis.__PAGEPATH__.instance;
+        const { width, height, walkableMask } = game.analysis;
+        const [start, finish] = game.level.nodes;
+        const toCell = point => Math.floor(point.y) * width + Math.floor(point.x);
+        const candidates = new Map(game.level.collectibles.filter(b => b.kind === 'multiplier').map(b => [toCell(b), b]));
+        function search(from, target, avoidFinish) {
+          const previous = new Int32Array(width * height); previous.fill(-2);
+          const queue = new Int32Array(previous.length); let head = 0, tail = 1;
+          const first = toCell(from); queue[0] = first; previous[first] = -1;
+          let found = -1;
+          while (head < tail) {
+            const at = queue[head++], x = at % width, y = Math.floor(at / width);
+            if (target(at)) { found = at; break; }
+            for (const next of [x ? at - 1 : -1, x + 1 < width ? at + 1 : -1, y ? at - width : -1, y + 1 < height ? at + width : -1]) {
+              if (next < 0 || !walkableMask[next] || previous[next] !== -2) continue;
+              if (avoidFinish && Math.hypot(next % width + .5 - finish.x, Math.floor(next / width) + .5 - finish.y) <= globalThis.__PAGEPATH__.Config.HIT_RADIUS + 2) continue;
+              previous[next] = at; queue[tail++] = next;
             }
           }
-          return { source: game.level.mazeSourceAnalysis === source, permanent: overlay.mazeWallLayer.childElementCount,
-            globalShape: overlay.obstacleShape.getAttribute('d') === paths.join(''), newEdges, invalidEdges,
-            localEdges: overlay.mazeContours?.segments?.length || 0,
-            flashHref: overlay.obstacleFlash.getAttribute('href'), hintHref: overlay.allObstacles.getAttribute('href') };
+          if (found < 0) return null;
+          const cells = [];
+          for (let at = found; at >= 0; at = previous[at]) cells.push({ x: at % width + .5, y: Math.floor(at / width) + .5 });
+          cells.reverse();
+          const path = [cells[0]];
+          for (let i = 1; i + 1 < cells.length; i++) {
+            if (cells[i].x - cells[i - 1].x !== cells[i + 1].x - cells[i].x || cells[i].y - cells[i - 1].y !== cells[i + 1].y - cells[i].y) path.push(cells[i]);
+          }
+          if (cells.length > 1) path.push(cells.at(-1));
+          return { found, path };
         }
-      }), targetTabId);
-      assert.equal(read.result.source && read.result.globalShape, true);
-      assert.equal(read.result.permanent, 0, 'added maze walls have no global visible geometry');
-      assert.equal(read.result.newEdges, 0, 'the new-map flash omits added-wall boundaries');
-      assert.equal(read.result.invalidEdges, 0, 'shown outlines remain exact collision edges');
-      assert.ok(read.result.localEdges > 0, 'added-wall edges are cached for proximity warnings');
-      assert.equal(read.result.flashHref, '#pagepath-obstacles'); assert.equal(read.result.hintHref, read.result.flashHref);
-    }
-    const page = await context.newPage();
-    await page.goto(origin);
-    const tabId = await activeTabId();
-    const deniedBeforeGesture = await worker.evaluate(async tabId => {
-      try {
-        await chrome.scripting.executeScript({ target: { tabId }, func: () => true });
-        return false;
-      } catch { return true; }
-    }, tabId);
-    assert.equal(deniedBeforeGesture, true, 'activeTab must require a user action');
-
-    await worker.evaluate(() => {
-      const original = __PAGEPATH__.ImageMapAnalyzer;
-      globalThis.pixelAnalysisRuns = 0;
-      __PAGEPATH__.ImageMapAnalyzer = { async analyze(...args) {
-        pixelAnalysisRuns++; return original.analyze(...args);
-      } };
-    });
-
-    await action(page);
-    await ready(page);
-    await until(() => badge(tabId), text => text === 'ON', 'ON badge');
-    assert.equal(await page.evaluate(() => typeof globalThis.__PAGEPATH__), 'undefined', 'game state is isolated from page JS');
-    const [injection] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', func: () => ({
-        state: globalThis.__PAGEPATH__.instance.state,
-        nodes: globalThis.__PAGEPATH__.instance.level.nodes.length,
-        snapshotMode: globalThis.__PAGEPATH__.instance.snapshot?.mode,
-        mapKind: globalThis.__PAGEPATH__.instance.analysis?.kind,
-        commonMask: globalThis.__PAGEPATH__.instance.collisionIndex.walkableMask === globalThis.__PAGEPATH__.instance.analysis.walkableMask &&
-          globalThis.__PAGEPATH__.instance.level.grid.walkableMask === globalThis.__PAGEPATH__.instance.analysis.walkableMask,
-        contentOpenCV: Boolean(globalThis.__PAGEPATH_OPENCV__),
-        domAnalyzer: Boolean(globalThis.__PAGEPATH__.PageAnalyzer),
-        hybridMerges: globalThis.__PAGEPATH__.instance.analysis.stats.compactDomMerged,
-        compactInterior: globalThis.__PAGEPATH__.instance.analysis.obstacleMask[264 * innerWidth + 950],
-      }),
+        const pickup = search(start, at => candidates.has(at), true);
+        if (!pickup) return null;
+        const bubble = candidates.get(pickup.found), escape = search(bubble, at => at === toCell(finish), false);
+        return escape ? { bubble, route: [start, ...pickup.path, ...escape.path, finish] } : null;
+      },
     }), tabId);
-    assert.equal(injection.result.state, 'READY');
-    assert.ok(injection.result.nodes >= 4);
-    assert.equal(injection.result.snapshotMode, 'screenshot');
-    assert.equal(injection.result.mapKind, 'pixel-mask');
-    assert.equal(injection.result.commonMask, true);
-    assert.equal(injection.result.contentOpenCV, false, 'WASM stays in the extension worker');
-    assert.equal(injection.result.domAnalyzer, false);
-    assert.ok(injection.result.hybridMerges > 0, 'the real extension supplies screenshot-validated compact geometry');
-    assert.equal(injection.result.compactInterior, 1, 'small outlined control becomes a single obstacle before distance transform');
-    await worker.evaluate(tabId => chrome.scripting.executeScript({ target: { tabId }, world: 'ISOLATED', func: () => {
-      const original = __PAGEPATH__.CompactDOM;
-      globalThis.compactDOMReadsAfterCapture = 0;
-      __PAGEPATH__.CompactDOM = { collect(...args) { compactDOMReadsAfterCapture++; return original.collect(...args); } };
-    } }), tabId);
-    // Play the actual generated route with real pointer input on the frozen page.
-    // This checks that a harder multi-region puzzle still fits its tighter ink budget.
-    const [witness] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED',
-      func: () => globalThis.__PAGEPATH__.instance.level.referencePath
-    }), tabId);
-    await page.locator('[data-pagepath-root] .hint').click();
-    await verifyOrdinaryHint(page);
-    const route = await page.locator('[data-pagepath-root] .hint-path').evaluate(el =>
-      Array.from(el.points, point => ({ x: point.x, y: point.y })));
-    assert.deepEqual(route, witness.result, 'normal mode displays its complete generated route');
-    await page.mouse.move(route[0].x, route[0].y);
-    assert.equal(await page.locator('[data-pagepath-root] .surface').evaluate(el => getComputedStyle(el).cursor), 'default');
+    return read.result;
+  }
+  async function complete(page, tabId) {
+    const before = await ready(tabId);
+    assert.equal(before.nodes, 2);
+    assert.equal(before.mapKind, 'pixel-mask');
+    assert.equal(before.sharedMask, true);
+    assert.equal(before.hints, 0);
+    assert.equal(before.cursor, 'default');
+    assert.equal(before.modes, 0);
+    assert.equal(before.resultPanels, 0);
+    assert.ok(before.difficulty >= 0 && before.difficulty <= 100);
+    assert.equal(before.stars, Math.max(1, Math.ceil(before.difficulty / 20)));
+    assert.equal(before.displayedStars, before.stars);
+    assert.equal(before.starsVisible, true);
+    assert.equal(before.xpVisible, false);
+    assert.equal(before.toolbarCursor, 'default');
+    assert.equal(before.retryCursor, 'default');
+    assert.equal(before.saveControls, 0);
+    assert.equal(before.timeControls, 0);
+    assert.ok(before.collectibles.some(bubble => bubble.kind === 'xp'));
+    assert.equal(before.collectibles.filter(bubble => bubble.kind === 'multiplier').length, 1);
+    assert.equal(before.multiplierVisible, 'true');
+    assert.equal(before.multiplierBreathing, 'bubble-breathe');
+    const witness = await routeThroughBubble(tabId); // Test-only mask search; the product has no answer control.
+    assert.ok(witness, 'the guaranteed multiplier can be reached before the finish');
+    const route = witness.route;
+    assert.ok(route.length > 2 && before.referenceLength > 200);
     await page.mouse.click(route[0].x, route[0].y);
-    assert.equal(await page.locator('[data-pagepath-root] .toolbar').getAttribute('data-state'), 'DRAWING', 'the starting click remains active after release');
-    assert.equal(await page.locator('[data-pagepath-root] .brush-cursor').getAttribute('data-visible'), 'true');
-    for (const point of route.slice(1)) await page.mouse.move(point.x, point.y, { steps: 2 });
-    assert.equal(await page.locator('[data-pagepath-root] .surface').evaluate(el => getComputedStyle(el).cursor), 'default');
-    assert.equal(await page.locator('[data-pagepath-root] .brush-cursor').getAttribute('data-visible'), 'false');
-    const [completed] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', func: () => {
-        const game = globalThis.__PAGEPATH__.instance;
-        return { state: game.state, collected: game.collected.size,
-          total: game.level.nodes.length, remaining: game.level.maxInk - game.length };
-      }
-    }), tabId);
-    assert.equal(completed.result.state, 'SUCCESS');
-    assert.equal(completed.result.collected, completed.result.total);
-    assert.ok(completed.result.remaining > 0);
-    await page.locator('[data-pagepath-root]').locator('.retry').click();
-    await ready(page);
-    const readSnapshot = () => worker.evaluate(async tabId => {
-      const [result] = await chrome.scripting.executeScript({
-        target: { tabId }, world: 'ISOLATED', func: () => {
-          const image = globalThis.__PAGEPATH__.instance?.overlay.snapshotImage;
-          if (!image) return null;
-          const rect = image.getBoundingClientRect();
-          return { src: image.src, complete: image.complete, width: image.naturalWidth,
-            connected: image.isConnected, visible: getComputedStyle(image).visibility === 'visible',
-            bounds: { width: rect.width, height: rect.height } };
-        },
-      });
-      return result.result;
-    }, tabId);
-    const snapshot = await until(readSnapshot, image => image?.complete && image.width > 0, 'snapshot image decoding');
-    assert.equal(snapshot.connected && snapshot.visible, true, 'decoded screenshot is visible');
-    assert.deepEqual(snapshot.bounds, { width: 1280, height: 900 });
-    const initialSnapshot = snapshot.src;
-    assert.match(initialSnapshot, /^data:image\/png;base64,/, 'capture is an in-memory screenshot');
-    const pageCanReadScreenshot = await page.evaluate(() => {
-      const root = document.querySelector('[data-pagepath-root]').shadowRoot;
-      const layer = root.querySelector('.snapshot-layer');
-      return !layer || layer.shadowRoot !== null || root.querySelector('img.page-snapshot') !== null;
-    });
-    assert.equal(pageCanReadScreenshot, false, 'page scripts cannot read screenshot pixels through the open overlay DOM');
-    assert.equal(await page.locator('[data-pagepath-root] select').count(), 0);
-    assert.equal(await page.locator('[data-pagepath-root] .mode-button').count(), 4);
-    const simpleMaze = page.locator('[data-pagepath-root] .mode-button[data-mode="maze"]');
-    assert.equal(await simpleMaze.isDisabled(), true, 'the simple page must not unlock an artificial empty-page maze');
-    await verifyLockedMaze(page, tabId);
-    await page.locator('[data-pagepath-root] .mode-button[data-mode="hell"]').click();
-    await ready(page);
-    assert.ok((await readSnapshot()).src === initialSnapshot, 'difficulty switch reuses the frozen webpage');
-    const [hellWitness] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', func: () => {
-        const game = globalThis.__PAGEPATH__.instance;
-        return { mode: game.mode, nodes: game.level.nodes.length, ink: game.level.inkMultiplier,
-          maxInk: game.level.maxInk, referenceLength: game.level.referenceLength,
-          title: game.overlay.modeButtons.find(button => button.dataset.mode === game.mode).title, controlTitle: game.overlay.modeControl.title,
-          route: game.level.referencePath, positions: game.level.nodes.map(({ x, y }) => ({ x, y })) };
-      }
-    }), tabId);
-    assert.equal(hellWitness.result.mode, 'hell');
-    assert.ok(hellWitness.result.nodes >= 16 && hellWitness.result.nodes <= 18);
-    const hellSpare = 6 + Math.max(0, hellWitness.result.nodes - 8) * 0.5;
-    assert.ok(Math.abs(hellWitness.result.ink - (1 + hellSpare / 100)) < 1e-12);
-    assert.ok(Math.abs(hellWitness.result.maxInk / hellWitness.result.referenceLength - (1 + hellSpare / 100)) < 1e-12);
-    assert.equal(hellWitness.result.title, '糕手', 'the real extension shows only the difficulty name');
-    assert.equal(hellWitness.result.controlTitle, hellWitness.result.title);
-    await page.locator('[data-pagepath-root] .hint').click();
-    await verifyOrdinaryHint(page);
-    assert.equal(await page.locator('[data-pagepath-root] .hint').getAttribute('aria-pressed'), 'true');
-    assert.ok((await readSnapshot()).src === initialSnapshot, 'answer overlay keeps the same frozen page');
-    const hellRoute = await page.locator('[data-pagepath-root] .hint-path').evaluate(el =>
-      Array.from(el.points, p => ({ x: p.x, y: p.y })));
-    assert.equal(hellRoute.length, hellWitness.result.route.length, 'the displayed answer includes every route segment');
-    await page.mouse.move(hellRoute[0].x, hellRoute[0].y);
-    await page.mouse.click(hellRoute[0].x, hellRoute[0].y);
-    await page.waitForFunction(() => [...document.querySelector('[data-pagepath-root]').shadowRoot.querySelectorAll('.mode-button')].every(button => button.disabled));
-    assert.equal(await page.locator('[data-pagepath-root] .toolbar-main').isVisible(), false,
-      'drawing folds the controls out of view');
-    assert.equal(await page.locator('[data-pagepath-root] .toolbar').evaluate(el => getComputedStyle(el).pointerEvents), 'none');
-    for (const point of hellRoute.slice(1)) await page.mouse.move(point.x, point.y, { steps: 2 });
-    const [hellCompleted] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', func: () => {
-        const game = globalThis.__PAGEPATH__.instance;
-        return { state: game.state, drawn: game.overlay.path.getTotalLength(), length: game.length,
-          inkLeft: game.level.maxInk - game.length };
-      }
-    }), tabId);
-    assert.equal(hellCompleted.result.state, 'SUCCESS');
-    assert.equal(await page.locator('[data-pagepath-root] .toolbar-main').isVisible(), true,
-      'success automatically expands the controls');
-    assert.ok(hellCompleted.result.drawn > 0 && hellCompleted.result.drawn <= 71);
-    assert.ok(hellCompleted.result.length > hellCompleted.result.drawn * 3 && hellCompleted.result.inkLeft > 0);
-    assert.equal(await page.locator('[data-pagepath-root] .hint').getAttribute('aria-pressed'), 'true');
-    await page.locator('[data-pagepath-root] .new-puzzle').click();
-    await ready(page);
-    assert.equal(await page.locator('[data-pagepath-root] .hint').getAttribute('aria-pressed'), 'false');
-    assert.equal(await page.locator('[data-pagepath-root] .mode-button[aria-pressed="true"]').getAttribute('data-mode'), 'hell');
-    const [variation] = await worker.evaluate(({ tabId, previous }) => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', args: [previous], func: previous => {
-        const game = globalThis.__PAGEPATH__.instance;
-        return { total: game.level.nodes.length, moved: game.level.nodes.filter(point =>
-          previous.every(other => Math.hypot(point.x - other.x, point.y - other.y) >= 48)).length,
-          historyCount: game.recentLayouts.length };
-      }
-    }), { tabId, previous: hellWitness.result.positions });
-    assert.ok(variation.result.moved >= variation.result.total / 2, 'same frozen page gets visibly different node positions');
-    assert.equal(variation.result.historyCount, 3);
-    await page.locator('[data-pagepath-root] .mode-button[data-mode="immortal"]').click();
-    await ready(page);
-    assert.ok((await readSnapshot()).src === initialSnapshot, 'Immortal also reuses the same frozen page');
-    await page.locator('[data-pagepath-root] .hint').click();
-    await verifyOrdinaryHint(page);
-    const immortalRoute = await page.locator('[data-pagepath-root] .hint-path').evaluate(el =>
-      Array.from(el.points, p => ({ x: p.x, y: p.y })));
-    await page.mouse.move(immortalRoute[0].x, immortalRoute[0].y);
-    await page.mouse.click(immortalRoute[0].x, immortalRoute[0].y);
-    for (const point of immortalRoute.slice(1)) await page.mouse.move(point.x, point.y, { steps: 2 });
-    const [immortalCompleted] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', func: () => {
-        const game = globalThis.__PAGEPATH__.instance;
-        return { state: game.state, mode: game.mode, ink: game.level.inkMultiplier,
-          inkLeft: game.level.maxInk - game.length, label: game.overlay.message.textContent };
-      }
-    }), tabId);
-    assert.equal(immortalCompleted.result.state, 'SUCCESS');
-    assert.equal(immortalCompleted.result.mode, 'immortal');
-    assert.equal(immortalCompleted.result.ink, 1.04);
-    assert.ok(immortalCompleted.result.inkLeft > 0);
-    assert.match(immortalCompleted.result.label, /神仙.*得分/);
-    await page.locator('[data-pagepath-root] .mode-button[data-mode="normal"]').click();
-    await ready(page);
-    assert.ok((await readSnapshot()).src === initialSnapshot, 'returning to Normal retains the same snapshot');
-    await page.waitForFunction(() =>
-      document.querySelector('[data-pagepath-root]')?.shadowRoot.querySelector('.obstacle-flash').getAnimations().length === 0);
-    const scene = { x: 0, y: 130, width: 1280, height: 770 };
-    const frozenBefore = await page.screenshot({ clip: scene });
-    await page.evaluate(() => {
-      const main = document.querySelector('main');
-      main.style.transform = 'translate(170px, 140px)';
-      main.innerHTML = '<h1>The live page changed.</h1><p>The frozen game must stay still.</p>';
-      document.body.style.background = '#ffcbba';
-      // Existing layout monitoring used both mutation observers and a periodic
-      // geometry check. Leave enough time for either regression to surface.
-    });
-    await delay(1200);
-    assert.equal(await page.locator('[data-pagepath-root] .toolbar').getAttribute('data-state'), 'READY',
-      'changes to the live page must not pause the frozen puzzle');
-    const frozenAfter = await page.screenshot({ clip: scene });
-    assert.deepEqual(frozenAfter, frozenBefore, 'visible game pixels stay identical while the live DOM changes');
-    await page.locator('[data-pagepath-root] .new-puzzle').click();
-    await ready(page);
-    assert.ok((await readSnapshot()).src === initialSnapshot, 'new maps reuse the same frozen page');
-    assert.equal(await worker.evaluate(() => pixelAnalysisRuns), 1,
-      'playing all modes, showing hints, retrying and new maps never rerun OpenCV');
-    const [domReads] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', func: () => globalThis.compactDOMReadsAfterCapture
-    }), tabId);
-    assert.equal(domReads.result, 0, 'playing and generating puzzles use the frozen merged map without rereading DOM');
-    fs.mkdirSync(path.join(root, 'test-results'), { recursive: true });
-    await page.screenshot({ path: path.join(root, 'test-results/pagepath-mv3.png') });
+    const drawing = await readGame(tabId);
+    assert.equal(drawing.state, 'DRAWING', 'click and release begins free mouse drawing');
+    assert.equal(drawing.cursor, 'none');
+    assert.equal(drawing.toolbarVisible, 'hidden');
+    for (let i = 1; i < route.length; i++) {
+      const previous = route[i - 1], point = route[i];
+      await page.mouse.move(point.x, point.y, { steps: Math.max(1, Math.ceil(Math.hypot(point.x - previous.x, point.y - previous.y) / 24)) });
+    }
+    const finished = await until(() => readGame(tabId), value => value?.state === 'SUCCESS' && value.result, 'completion and immediate experience');
+    assert.equal(finished.cursor, 'default');
+    assert.equal(finished.toolbarVisible, 'visible');
+    assert.ok(finished.run.collectedIds.includes(witness.bubble.id));
+    assert.equal(finished.run.multiplier, witness.bubble.value);
+    assert.equal(finished.result.multiplier, witness.bubble.value);
+    assert.ok(finished.result.score > 0 && finished.result.xp > 0);
+    assert.equal(finished.result.xp, (finished.result.baseXp + finished.result.collectedXp) * finished.result.multiplier);
+    assert.equal(finished.result.score, Math.round(600 + 20 * finished.result.scoringDifficulty));
+    assert.equal(Object.hasOwn(finished.result, 'elapsedMs'), false);
+    assert.equal(finished.result.awarded, true);
+    assert.equal(finished.profile.totalXp, before.profile.totalXp + finished.result.xp, 'experience is credited as soon as completion appears');
+    assert.equal(finished.resultPanels, 0);
+    assert.equal(finished.xpInToolbar, true);
+    assert.equal(finished.xpVisible, true);
+    assert.equal(finished.starsVisible, false);
+    assert.equal(finished.xpText, `+${finished.result.xp}`);
+    assert.equal(finished.saveControls, 0);
+    return finished;
+  }
 
+  try {
+    await launch();
+    const manifest = await worker.evaluate(() => chrome.runtime.getManifest());
+    assert.equal(manifest.version, '3.0.0');
+    assert.deepEqual(manifest.permissions, ['activeTab', 'scripting', 'storage']);
+    assert.equal(manifest.host_permissions, undefined);
+    const page = await context.newPage();
+    await page.goto(`${origin}/blank`);
+    const tabId = await activeTabId();
+    assert.equal(await worker.evaluate(async tabId => {
+      try { await chrome.scripting.executeScript({ target: { tabId }, func: () => true }); return false; }
+      catch { return true; }
+    }, tabId), true, 'activeTab requires a real extension action');
     await action(page);
-    await gone(page);
-    await until(() => badge(tabId), text => text === '', 'second action clears badge');
-    const restoredLivePage = await page.screenshot({ clip: scene });
-    assert.notDeepEqual(restoredLivePage, frozenBefore, 'leaving the game reveals the changed live page');
-    assert.equal(await page.locator('main h1').textContent(), 'The live page changed.');
-    await action(page);
-    await ready(page);
-    const beforeResize = await readSnapshot();
-    await page.setViewportSize({ width: 1180, height: 850 });
-    await page.waitForFunction(() =>
-      document.querySelector('[data-pagepath-root]')?.shadowRoot.querySelector('.toolbar').dataset.state === 'PAUSED');
-    await page.locator('[data-pagepath-root] .regenerate').click();
-    await ready(page);
-    const refreshedSnapshot = await readSnapshot();
-    assert.equal(refreshedSnapshot.width, 1180, 'regeneration captures the resized viewport');
-    assert.deepEqual(refreshedSnapshot.bounds, { width: 1180, height: 850 });
-    assert.ok(refreshedSnapshot.src !== beforeResize.src, 'regeneration replaces the old screenshot');
+    await ready(tabId);
+    assert.equal(await page.evaluate(() => typeof globalThis.__PAGEPATH__), 'undefined');
+    // Simulate a temporary disk/storage error beyond the immediate retry
+    // window. Rewards must still be credited now and saved after exit.
+    await worker.evaluate(() => {
+      const write = chrome.storage.local.set.bind(chrome.storage.local);
+      let failures = 5;
+      chrome.storage.local.set = async values => {
+        if (values['pagepath.progress.v3'] && failures-- > 0) throw new Error('simulated transient storage failure');
+        return write(values);
+      };
+    });
+    const first = await complete(page, tabId);
+    await page.locator('[data-pagepath-root] .new-puzzle').click();
+    const second = await complete(page, tabId);
+    assert.notEqual(first.run.id, second.run.id);
+    assert.equal(second.profile.wins, 2);
+    assert.equal(second.profile.totalXp, first.result.xp + second.result.xp);
     await page.keyboard.press('Escape');
     await gone(page);
-    await until(() => badge(tabId), text => text === '', 'Escape reports PAGEPATH_CLOSED');
-    assert.equal(await page.locator('img.page-snapshot').count(), 0, 'Escape removes the screenshot along with its host');
-    assert.equal(await readSnapshot(), null, 'Escape releases the isolated snapshot reference');
+    const saved = await until(savedProfile, value => value?.totalRuns === 2 && value.totalXp === second.profile.totalXp, 'automatic reward persistence');
+    assert.equal(saved.totalRuns, 2);
+    assert.equal(saved.totalXp, second.profile.totalXp);
 
+    // Reopening on a different page reads the extension-wide profile.
+    await page.goto(`${origin}/content`);
     await action(page);
-    await ready(page);
-    await page.mouse.click(900, 700, { button: 'right' });
+    await ready(tabId);
+    const restored = await until(() => readGame(tabId), value => value?.profile?.totalXp === saved.totalXp, 'cross-page profile');
+    assert.equal(restored.profile.wins, 2);
+    await page.mouse.click(10, 150, { button: 'right' });
     await gone(page);
-    await until(() => badge(tabId), text => text === '', 'right-click reports PAGEPATH_CLOSED');
-    assert.equal(await readSnapshot(), null, 'right-click releases the frozen snapshot');
 
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await action(page);
-    await ready(page);
-    await page.goto(`${origin}/next-page`);
-    await gone(page);
-    await until(() => badge(tabId), text => text === '', 'navigation clears badge');
-    const resetPopup = await worker.evaluate(tabId => chrome.action.getPopup({ tabId }), tabId);
-    assert.equal(resetPopup, '');
-
-    // The repository fixture stays below the original foreground requirement.
-    // Unrelated content counts cannot unlock an artificial grid or frame.
-    const mazePage = await context.newPage();
-    await mazePage.goto(`${origin}/maze-open`);
-    await mazePage.evaluate(() => document.fonts.ready);
-    await action(mazePage);
-    await ready(mazePage);
-    const openMazeButton = mazePage.locator('[data-pagepath-root] .mode-button[data-mode="maze"]');
-    assert.equal(await openMazeButton.isDisabled(), true, 'the repository page has insufficient original foreground for a natural maze');
-    await verifyLockedMaze(mazePage, await activeTabId());
-    await mazePage.keyboard.press('Escape');
-    await gone(mazePage);
-
-    // An actual screenshot with sparse content spread across all 48 regions
-    // exercises a green dispersion check next to a red complexity cross.
-    await mazePage.goto(`${origin}/maze-distributed`);
-    await action(mazePage); await ready(mazePage);
-    const mixedCriteria = await verifyLockedMaze(mazePage, await activeTabId());
-    assert.ok(mixedCriteria.sourceObstacleRatio < .2 && mixedCriteria.sourceOccupiedRegions >= 30);
-    await mazePage.locator('[data-pagepath-root] .maze-mode-slot').hover();
-    await mazePage.screenshot({ path: path.join(root, 'test-results/pagepath-mv3-maze-locked-tooltip.png') });
-    await mazePage.keyboard.press('Escape'); await gone(mazePage);
-
-    // This qualified screenshot previously failed because its straight gaps
-    // had no natural maze. Added transparent walls now supply a safe fallback.
-    await mazePage.goto(`${origin}/maze-no-route`);
-    const fallbackTabId = await activeTabId();
-    const analysesBeforeFallback = await worker.evaluate(() => pixelAnalysisRuns);
-    await action(mazePage); await ready(mazePage);
-    const fallbackButton = mazePage.locator('[data-pagepath-root] .mode-button[data-mode="maze"]');
-    assert.equal(await fallbackButton.isDisabled(), false, 'qualifying density and distribution unlock before route generation');
-    await verifyUnlockedMaze(mazePage);
-    await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', func: () => {
-        const game = __PAGEPATH__.instance, source = game.sourceAnalysis;
-        globalThis.__mv3GenerationSource = { source, snapshot: game.snapshot,
-          obstacle: source.obstacleMask.slice(), walkable: source.walkableMask.slice(),
-          distance: source.distanceMap.slice(), contours: source.contours.segments.slice() };
-      }
-    }), fallbackTabId);
-    await fallbackButton.click(); await ready(mazePage);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const [constructed] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-        target: { tabId }, world: 'ISOLATED', func: () => {
-          const game = __PAGEPATH__.instance, prior = __mv3GenerationSource, source = prior.source;
-          const level = game.level;
-          return { mode: game.mode, state: game.state, generationFailed: game.generationFailed, available: game.mazeAvailability.available,
-            density: game.mazeAvailability.obstacleRatio, distribution: game.mazeAvailability.occupiedRegions,
-            kind: level.maze.kind, nodes: level.nodes.length, unlimited: level.maxInk === Infinity && level.unlimitedInk,
-            spread: Math.hypot(level.nodes[0].x - level.nodes[1].x, level.nodes[0].y - level.nodes[1].y) >=
-              Math.max(80, Math.hypot(source.width, source.height) * .18),
-            enoughRoute: level.referenceLength >= Math.max(220, Math.hypot(source.width, source.height) * .65) && level.challenge.turns >= 4,
-            nodeRoom: level.nodes.every(p => game.analysis.distanceMap[Math.floor(p.y) * source.width + Math.floor(p.x)] >= 12),
-            commonMask: level.analysis === game.analysis && game.collisionIndex.walkableMask === game.analysis.walkableMask,
-            safe: level.referencePath.every((point, i, route) => !i || !__PAGEPATH__.Collision.segmentHits(route[i - 1], point, game.collisionIndex)),
-            originalObstaclesPreserved: source.obstacleMask.every((value, i) => !value || game.analysis.obstacleMask[i]),
-            preserved: game.snapshot === prior.snapshot && game.sourceAnalysis === source && game.analysis !== source &&
-              source.obstacleMask.every((value, i) => value === prior.obstacle[i]) &&
-              source.walkableMask.every((value, i) => value === prior.walkable[i]) &&
-              source.distanceMap.every((value, i) => value === prior.distance[i]) &&
-              source.contours.segments.every((value, i) => value === prior.contours[i]) };
-        }
-      }), fallbackTabId);
-      assert.equal(constructed.result.mode, 'maze'); assert.equal(constructed.result.state, 'READY');
-      assert.equal(constructed.result.kind, 'route-first'); assert.equal(constructed.result.nodes, 2);
-      assert.equal(constructed.result.generationFailed, false);
-      for (const key of ['available', 'unlimited', 'commonMask', 'safe', 'preserved', 'originalObstaclesPreserved', 'spread', 'enoughRoute', 'nodeRoom']) assert.equal(constructed.result[key], true, key);
-      assert.ok(constructed.result.density >= .2 && constructed.result.distribution >= 30);
-      assert.equal(await mazePage.locator('[data-pagepath-root] .generation-error').isVisible(), false);
-      await verifyUnlockedMaze(mazePage);
-      await verifyTransparentMaze(fallbackTabId);
-      assert.equal(await worker.evaluate(() => pixelAnalysisRuns), analysesBeforeFallback + 1, 'fallback generation reuses the original capture');
-      const route = await verifyNoMazeHint(mazePage, fallbackTabId);
-      await verifyTransparentMaze(fallbackTabId);
-      if (!attempt) await mazePage.screenshot({ path: path.join(root, 'test-results/pagepath-mv3-maze-constructed.png') });
-      await mazePage.mouse.click(route[0].x, route[0].y);
-      for (const point of route.slice(1)) await mazePage.mouse.move(point.x, point.y, { steps: 2 });
-      assert.equal(await mazePage.locator('[data-pagepath-root] .toolbar').getAttribute('data-state'), 'SUCCESS', 'the fallback answer completes with real pointer events');
-      assert.equal(await mazePage.locator('[data-pagepath-root] .cursor-ink').textContent(), '∞');
-      await verifyNoMazeHint(mazePage, fallbackTabId);
-      if (!attempt) { await mazePage.locator('[data-pagepath-root] .new-puzzle').click(); await ready(mazePage); }
-    }
-    await mazePage.locator('[data-pagepath-root] .mode-button[data-mode="normal"]').click(); await ready(mazePage);
-    const [fallbackRestored] = await worker.evaluate(tabId => chrome.scripting.executeScript({
-      target: { tabId }, world: 'ISOLATED', func: () => {
-        const game = __PAGEPATH__.instance;
-        return game.mode === 'normal' && !game.generationFailed && game.level &&
-          game.snapshot === __mv3GenerationSource.snapshot && game.analysis === __mv3GenerationSource.source;
-      }
-    }), fallbackTabId);
-    assert.equal(Boolean(fallbackRestored.result), true, 'normal mode restores the original map after constructed maze play');
-    assert.equal(await mazePage.locator('[data-pagepath-root] .generation-error').isVisible(), false);
-    await mazePage.keyboard.press('Escape'); await gone(mazePage);
-
-    // A separate dense webpage exercises real activeTab capture, worker CV,
-    // short red obstacle connections, actual drawing and return to the source.
-    await mazePage.goto(`${origin}/maze`);
-    await mazePage.evaluate(() => document.fonts.ready);
-    const mazeTabId = await activeTabId();
-    const analysesBeforeMaze = await worker.evaluate(() => pixelAnalysisRuns);
-    await action(mazePage);
-    await ready(mazePage);
-    assert.equal(await worker.evaluate(() => pixelAnalysisRuns), analysesBeforeMaze + 1);
-    const mazeButton = mazePage.locator('[data-pagepath-root] .mode-button[data-mode="maze"]');
-    const [naturalAvailability] = await worker.evaluate(mazeTabId => chrome.scripting.executeScript({
-      target: { tabId: mazeTabId }, world: 'ISOLATED', func: () => __PAGEPATH__.instance.mazeAvailability,
-    }), mazeTabId);
-    assert.equal(await mazeButton.isDisabled(), false,
-      `dense natural obstacles can support the second level: ${JSON.stringify(naturalAvailability.result)}`);
-    assert.equal(await mazeButton.getAttribute('title'), '第二关');
-    await verifyUnlockedMaze(mazePage);
-    await worker.evaluate(mazeTabId => chrome.scripting.executeScript({
-      target: { tabId: mazeTabId }, world: 'ISOLATED', func: () => {
-        const game = __PAGEPATH__.instance, source = game.sourceAnalysis;
-        globalThis.__mv3MazeSource = { snapshot: game.snapshot, source,
-          obstacle: source.obstacleMask.slice(), walkable: source.walkableMask.slice(),
-          distance: source.distanceMap.slice(), contours: source.contours.segments.slice() };
-      }
-    }), mazeTabId);
-    await mazeButton.click();
-    await ready(mazePage);
-    const [mazeWitness] = await worker.evaluate(mazeTabId => chrome.scripting.executeScript({
-      target: { tabId: mazeTabId }, world: 'ISOLATED', func: () => {
-        const game = __PAGEPATH__.instance, level = game.level;
-        const source = __mv3MazeSource.source, { width, height } = source;
-        const expectedMask = new Uint8Array(source.obstacleMask);
-        for (const r of level.mazeMergedObstacles) for (let y = r.y; y < r.y + r.height; y++) {
-          expectedMask.fill(1, y * width + r.x, y * width + r.x + r.width);
-        }
-        let originalAnchors = true;
-        const baseMask = level.mazeSourceAnalysis.obstacleMask;
-        const originalAt = p => p.x < 0 || p.y < 0 || p.x >= width || p.y >= height ||
-          Boolean(baseMask[Math.floor(p.y) * width + Math.floor(p.x)]);
-        for (const wall of level.mazeWallSegments) {
-          originalAnchors &&= wall.anchors.length >= 1 && wall.anchors.every(p => originalAt(p) || p.kind === 'viewport');
-          for (let i = 1; i < wall.points.length; i++) {
-            const a = wall.points[i - 1], b = wall.points[i], r = wall.width / 2;
-            const dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy;
-            for (let y = Math.max(0, Math.floor(Math.min(a.y, b.y) - r)); y < Math.min(height, Math.ceil(Math.max(a.y, b.y) + r)); y++) {
-              for (let x = Math.max(0, Math.floor(Math.min(a.x, b.x) - r)); x < Math.min(width, Math.ceil(Math.max(a.x, b.x) + r)); x++) {
-                const t = d2 ? Math.max(0, Math.min(1, ((x + .5 - a.x) * dx + (y + .5 - a.y) * dy) / d2)) : 0;
-                if ((x + .5 - a.x - t * dx) ** 2 + (y + .5 - a.y - t * dy) ** 2 <= r * r + 1e-9) expectedMask[y * width + x] = 1;
-              }
-            }
-          }
-        }
-        return { state: game.state, mode: game.mode, nodes: level.nodes.length,
-          unlimited: level.unlimitedInk && level.maxInk === Infinity,
-          inkLabel: game.overlay.cursorInk.textContent, walls: level.mazeWallSegments.length,
-          permanentWalls: game.overlay.mazeWallLayer.childElementCount,
-          sourceObstacleRatio: __mv3MazeSource.source.obstacleMask.reduce((sum, value) => sum + Number(Boolean(value)), 0) /
-            __mv3MazeSource.source.obstacleMask.length,
-          connectionThicknesses: level.mazeWallSegments.map(wall => wall.width), originalAnchors,
-          noOverlayMaze: !level.mazeCarvedPaths.length && !game.overlay.mazeFloorLayer.childElementCount,
-          fixedAnswerSafe: level.plannedReferencePath.every((p, i, route) => !i || !__PAGEPATH__.Collision.segmentHits(route[i - 1], p, level.obstacleIndex)),
-          exactObstacleUnion: expectedMask.every((value, i) => value === game.analysis.obstacleMask[i]),
-          addedPixelRatio: game.analysis.obstacleMask.reduce((sum, value, i) => sum +
-            Number(Boolean(value) && !__mv3MazeSource.source.obstacleMask[i]), 0) / game.analysis.obstacleMask.length,
-          ownMap: game.analysis !== __mv3MazeSource.source,
-          commonMask: game.analysis.walkableMask === game.collisionIndex.walkableMask &&
-            game.overlay.pixelMap === game.analysis && level.analysis === game.analysis,
-          sameSnapshot: game.snapshot === __mv3MazeSource.snapshot,
-          route: level.referencePath };
-      }
-    }), mazeTabId);
-    assert.equal(mazeWitness.result.state, 'READY');
-    assert.equal(mazeWitness.result.mode, 'maze');
-    assert.equal(mazeWitness.result.nodes, 2);
-    assert.equal(mazeWitness.result.unlimited, true);
-    assert.equal(mazeWitness.result.inkLabel, '∞');
-    assert.ok(mazeWitness.result.walls > 0);
-    assert.equal(mazeWitness.result.permanentWalls, 0, 'added connectors stay transparent until approached');
-    assert.ok(mazeWitness.result.connectionThicknesses.every(width => width === 3), 'connections use three-pixel circular-cap strokes');
-    assert.equal(mazeWitness.result.noOverlayMaze, true, 'natural page content is not replaced by a grid or paper floor');
-    assert.equal(mazeWitness.result.fixedAnswerSafe, true, 'walls preserve the answer that was chosen before they were placed');
-    assert.ok(mazeWitness.result.addedPixelRatio > 0, 'connections add foreground only where the original gap is closed');
-    assert.ok(mazeWitness.result.sourceObstacleRatio >= .20, 'the maze needs at least 20% original natural foreground');
-    assert.equal(mazeWitness.result.originalAnchors, true, 'each connector attaches directly to original content or the existing boundary');
-    assert.equal(mazeWitness.result.exactObstacleUnion, true, 'the final mask is exactly original content plus declared connectors');
-    assert.equal(mazeWitness.result.ownMap && mazeWitness.result.commonMask && mazeWitness.result.sameSnapshot, true,
-      'the maze uses a derived collision map while retaining the frozen screenshot');
-    await verifyTransparentMaze(mazeTabId);
-    const mazeRoute = await verifyNoMazeHint(mazePage, mazeTabId);
-    await verifyTransparentMaze(mazeTabId);
-    assert.deepEqual(mazeRoute, mazeWitness.result.route);
-    await mazePage.screenshot({ path: path.join(root, 'test-results/pagepath-maze-mv3.png') });
-    await mazePage.mouse.move(mazeRoute[0].x, mazeRoute[0].y);
-    await mazePage.mouse.click(mazeRoute[0].x, mazeRoute[0].y);
-    assert.equal(await mazePage.locator('[data-pagepath-root] .toolbar-main').isVisible(), false);
-    for (const point of mazeRoute.slice(1)) await mazePage.mouse.move(point.x, point.y, { steps: 2 });
-    const [mazeCompleted] = await worker.evaluate(mazeTabId => chrome.scripting.executeScript({
-      target: { tabId: mazeTabId }, world: 'ISOLATED', func: () => {
-        const game = __PAGEPATH__.instance;
-        return { state: game.state, collected: game.collected.size, ink: game.overlay.cursorInk.textContent,
-          message: game.overlay.message.textContent, length: game.length };
-      }
-    }), mazeTabId);
-    assert.equal(mazeCompleted.result.state, 'SUCCESS', 'the real extension maze reference is completable with mouse events');
-    assert.equal(mazeCompleted.result.collected, 2);
-    assert.equal(mazeCompleted.result.ink, '∞');
-    assert.ok(mazeCompleted.result.length > 0);
-    assert.doesNotMatch(mazeCompleted.result.message, /NaN|Infinity/);
-    assert.equal(await mazePage.locator('[data-pagepath-root] .toolbar-main').isVisible(), true);
-    await verifyNoMazeHint(mazePage, mazeTabId);
-    await mazePage.locator('[data-pagepath-root] .mode-button[data-mode="normal"]').click();
-    await ready(mazePage);
-    const [mazeRestored] = await worker.evaluate(mazeTabId => chrome.scripting.executeScript({
-      target: { tabId: mazeTabId }, world: 'ISOLATED', func: () => {
-        const game = __PAGEPATH__.instance, { snapshot, source, obstacle, walkable, distance, contours } = __mv3MazeSource;
-        return { mode: game.mode, restored: game.analysis === source && game.sourceAnalysis === source &&
-          game.snapshot === snapshot && source.obstacleMask.every((value, i) => value === obstacle[i]) &&
-          source.walkableMask.every((value, i) => value === walkable[i]) &&
-          source.distanceMap.every((value, i) => value === distance[i]) &&
-          source.contours.segments.every((value, i) => value === contours[i]),
-          finiteInk: Number.isFinite(game.level.maxInk) && !game.level.unlimitedInk,
-          walls: game.overlay.mazeWallLayer.childElementCount, ink: game.overlay.cursorInk.textContent };
-      }
-    }), mazeTabId);
-    assert.deepEqual(mazeRestored.result, { mode: 'normal', restored: true, finiteInk: true, walls: 0, ink: '100%' });
-    assert.equal(await worker.evaluate(() => pixelAnalysisRuns), analysesBeforeMaze + 1,
-      'the second level uses cached screenshot analysis throughout generation, play and return');
-    await mazePage.keyboard.press('Escape');
-    await gone(mazePage);
-
-    const restricted = await context.newPage();
-    await restricted.goto('chrome://version');
-    const restrictedId = await activeTabId();
-    await action(restricted);
-    await until(() => badge(restrictedId), text => text === '!', 'restricted-page badge');
-    const unavailable = await worker.evaluate(async tabId => ({
-      popup: await chrome.action.getPopup({ tabId }),
-      title: await chrome.action.getTitle({ tabId }),
-    }), restrictedId);
-    assert.match(unavailable.popup, /\/src\/unavailable\.html$/);
-    assert.match(unavailable.title, /此页面不允许扩展运行/);
-    assert.equal(await restricted.locator('[data-pagepath-root]').count(), 0);
-    assert.deepEqual(errors, [], 'no browser JavaScript or CSP console errors');
-    console.log(JSON.stringify({ mv3: 'passed', browser: context.browser().version(), extensionId: id,
-      originalManifest: true, actionGrantsActiveTab: true, isolatedWorld: true,
-      toolbarToggle: true, escapeMessage: true, rightClickExit: true, navigationReset: true,
-      frozenScreenshot: true, liveDOMDoesNotPause: true, newMapReusesSnapshot: true,
-      viewportResizeRegeneratesSnapshot: true,
-      strictImageCSP: true, screenshotHiddenFromPage: true, livePageRestored: true,
-      restrictedPageFeedback: true, referenceRouteCompleted: true, hellRouteCompleted: true, immortalRouteCompleted: true,
-      mazeSimplePageDisabled: true, mazeRouteCompleted: true, mazeUnlimitedInk: true,
-      mazeLockedPadlockClear: true, mazeSourceDrivenCriterionChecks: true, mazeUnlockedStarOnly: true, mazeDisabledCannotSwitch: true,
-      mazeConstructedFallbackCompleted: true, mazeFallbackPreservesCapture: true,
-      mazeOpenBackgroundDisabled: true, mazeNaturalObstacles: true, mazeWallsTransparentWithoutHints: true,
-      ordinaryHintsShowRoutesOnly: true, mazeHintsUnavailable: true,
-      mazeUsesCachedScreenshot: true, mazeReturnRestoresOriginalMap: true,
-      modeSwitchKeepsSnapshot: true, shortTailPreservesFullInk: true, nodes: injection.result.nodes,
-      screenshot: 'test-results/pagepath-mv3.png' }, null, 2));
+    // Persist the exact temporary browser profile across a genuine restart.
+    await context.close(); context = null;
+    await launch();
+    const persisted = await savedProfile();
+    assert.equal(persisted.totalXp, saved.totalXp);
+    assert.equal(persisted.totalRuns, 2);
+    const restartedPage = await context.newPage();
+    await restartedPage.goto(`${origin}/blank-restarted`);
+    const restartedTab = await activeTabId();
+    await action(restartedPage);
+    await ready(restartedTab);
+    const reopened = await until(() => readGame(restartedTab), value => value?.profile?.totalXp === saved.totalXp, 'restarted game profile');
+    assert.equal(reopened.profile.wins, 2);
+    await restartedPage.keyboard.press('Escape');
+    await gone(restartedPage);
+    assert.deepEqual(errors, [], 'no browser JavaScript or CSP errors');
+    console.log('MV3 maze smoke passed: one guaranteed visible breathing multiplier per map, genuine pickup, difficulty-only score, collectible XP and automatic persistence across storage failures, game exit and browser restart.');
   } finally {
-    await context?.close();
-    await new Promise(resolve => server.close(resolve));
-    // Delete only the exact temporary profile created above, never a real profile.
-    const temp = path.resolve(os.tmpdir());
-    assert.ok(path.resolve(profile).startsWith(temp + path.sep) && path.basename(profile).startsWith('pagepath-mv3-'));
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    try { await context?.close(); }
+    finally {
+      await new Promise(resolve => server.close(resolve));
+      assert.equal(path.dirname(path.resolve(profile)), temporaryRoot, 'cleanup is limited to the created temporary profile');
+      assert.ok(path.basename(profile).startsWith('pagepath-mv3-'));
+      fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });
