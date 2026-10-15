@@ -38,7 +38,7 @@
     '糕手': ['Pro', 'ガチ勢'],
     '吴迪': ['Invincible', '無敵'],
     '？？？': ['???', '？？？'],
-    '宇宙超级无敌螺旋牛逼': ['Cosmic Super Ultra Spiral Badass', '宇宙最強無敵ぐるぐるバケモン'],
+    '神仙': ['Immortal', '仙人'],
     '地图分析视图': ['Map analysis view', 'マップ解析ビュー'],
     '切换地图分析视图': ['Toggle map analysis view', 'マップ解析ビューを切り替え'],
     '正在生成迷宫…': ['Generating maze…', '迷路を生成中…'],
@@ -162,7 +162,7 @@
     // Unknown engine errors are not suitable player instructions.
     return Object.hasOwn(messages, message) ? t(message) : t('地图暂未准备好，请刷新后重试');
   }
-  const titles = ['萌新', '糕手', '吴迪', '？？？', '宇宙超级无敌螺旋牛逼'];
+  const titles = ['萌新', '糕手', '吴迪', '？？？', '神仙'];
   const title = level => t(titles[Math.max(0, Math.min(4, Math.floor(Number(level) || 1) - 1))]);
   P.I18n = Object.freeze({ locale, t, error, title, number: value => formatter.format(value) });
 })();

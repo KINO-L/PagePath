@@ -8,7 +8,7 @@
       Object.freeze({ level: 2, name: '糕手', minXp: 1500 }),
       Object.freeze({ level: 3, name: '吴迪', minXp: 15000 }),
       Object.freeze({ level: 4, name: '？？？', minXp: 60000 }),
-      Object.freeze({ level: 5, name: '宇宙超级无敌螺旋牛逼', minXp: 150000 }),
+      Object.freeze({ level: 5, name: '神仙', minXp: 150000 }),
     ]) });
   const integer = (value, maximum = RULES.maxTotal) => typeof value === 'number' && Number.isFinite(value)
     ? Math.max(0, Math.min(maximum, Math.floor(value))) : 0;

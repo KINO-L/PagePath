@@ -125,7 +125,7 @@ test('XP is cumulative, level thresholds rise, and a reward can cross multiple l
   assert.equal(third.wins, 3);
   const final = P.award(third.profile, reward('final', 3000, 90000));
   assert.equal(final.level, 5);
-  assert.equal(final.title, '宇宙超级无敌螺旋牛逼');
+  assert.equal(final.title, '神仙');
   assert.equal(final.levelsGained, 1);
   assert.equal(final.totalXp, 150000);
   assert.equal(final.wins, 4);
@@ -139,7 +139,7 @@ test('XP is cumulative, level thresholds rise, and a reward can cross multiple l
 
 test('level boundary math is exact at each stage and enormous XP is bounded', () => {
   const thresholds = [0, 1500, 15000, 60000, 150000];
-  const titles = ['萌新', '糕手', '吴迪', '？？？', '宇宙超级无敌螺旋牛逼'];
+  const titles = ['萌新', '糕手', '吴迪', '？？？', '神仙'];
   assert.equal(P.RULES.maxLevel, 5);
   for (let stage = 0; stage < thresholds.length; stage++) {
     const at = P.view({ totalXp: thresholds[stage] });
@@ -168,7 +168,7 @@ test('level boundary math is exact at each stage and enormous XP is bounded', ()
   const capped = P.view({ totalXp: Number.MAX_VALUE });
   assert.equal(capped.totalXp, P.RULES.maxTotal);
   assert.equal(capped.level, 5);
-  assert.equal(capped.title, '宇宙超级无敌螺旋牛逼');
+  assert.equal(capped.title, '神仙');
   assert.equal(capped.progress, 1);
   assert.equal(capped.currentXp, 0);
   assert.equal(capped.xpIntoLevel, 0);
@@ -230,7 +230,7 @@ test('legacy mode profiles migrate without losing XP, totals or settlement IDs',
 test('existing v3 profiles recalculate all five ranks from saved XP and preserve settlements', () => {
   for (const [totalXp, expectedLevel, expectedTitle] of [
     [1120, 1, '萌新'], [14999, 2, '糕手'], [15000, 3, '吴迪'],
-    [120000, 4, '？？？'], [302940, 5, '宇宙超级无敌螺旋牛逼'],
+    [120000, 4, '？？？'], [302940, 5, '神仙'],
   ]) {
     const stored = { version: 3, totalXp, totalScore: 14000, totalRuns: 12, bestScore: 2200,
       level: 100, title: '迷宫之神', currentXp: 0, nextLevelXp: 0, maxLevel: true,

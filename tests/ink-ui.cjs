@@ -97,7 +97,7 @@ async function checkLanguages(browser, errors) {
       if (scenario.expected !== 'zh-CN') {
         assert.notEqual(initial.startup, '正在生成迷宫…');
         assert.notEqual(initial.retry, '重试');
-        assert.notEqual(initial.title, '宇宙超级无敌螺旋牛逼');
+        assert.notEqual(initial.title, '神仙');
       }
       for (const width of [280, 320, 1280]) {
         await page.setViewportSize({ width, height: 720 });
@@ -107,7 +107,7 @@ async function checkLanguages(browser, errors) {
             ui.renderLevel(state === 'GENERATING' ? null : localeLevel);
             // A saved/worker view may have been created before the UI language changed.
             // Derive the displayed title from its level instead of reusing that label.
-            ui.update({ state, generationFailed: false, profile: { ...P.Progression.view(stored), title: '宇宙超级无敌螺旋牛逼' },
+            ui.update({ state, generationFailed: false, profile: { ...P.Progression.view(stored), title: '神仙' },
               result: state === 'SUCCESS' ? { xp: 1234, level: 5, previousLevel: 4, leveledUp: true } : null });
             ui.updateCollectibles([], { xp: 9990, multiplier: 8 });
             const title = ui.toolbar.querySelector('.profile-title');
@@ -332,11 +332,11 @@ async function checkLanguages(browser, errors) {
           continue;
         }
         assert.equal(rank.level, 'Lv.5');
-        assert.equal(rank.title, '宇宙超级无敌螺旋牛逼');
+        assert.equal(rank.title, '神仙');
         assert.equal(rank.titleFits, true, width + 'px: the final title is shown in full');
         assert.equal(rank.progress, 100);
         assert.equal(rank.progressText, '已满级');
-        assert.match(rank.profileTooltip, /宇宙超级无敌螺旋牛逼 · 已满级$/);
+        assert.match(rank.profileTooltip, /神仙 · 已满级$/);
       }
     }
     await page.setViewportSize({ width: 1280, height: 720 });
