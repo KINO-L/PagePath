@@ -1,0 +1,90 @@
+name: Publish v3.1.0 (temporary)
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-v3.1.0.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: miye-publish-v3.1.0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'KINO-L/PagePath' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 2361e0d44fc1342884af973c466490396046892c
+          persist-credentials: false
+      - name: Verify release source
+        shell: pwsh
+        run: |
+          $manifest = Get-Content manifest.json -Raw | ConvertFrom-Json
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($manifest.version -ne '3.1.0' -or $package.version -ne '3.1.0') { throw 'Unexpected release version.' }
+          if ((git rev-parse HEAD) -ne '2361e0d44fc1342884af973c466490396046892c') { throw 'Unexpected release source.' }
+      - name: Test
+        run: npm test
+      - name: Package
+        shell: pwsh
+        run: ./scripts/package.ps1
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = 'v3.1.0'
+          $commit = '2361e0d44fc1342884af973c466490396046892c'
+          $archive = Join-Path $PWD 'dist/Miye-v3.1.0.zip'
+          $notes = @'
+          迷页，把网页变成迷宫。带着小火苗探索通道、收集经验泡泡、寻找出口。
+
+          - 更名为「迷页」，采用洞口与火苗组成的新图标，项目首页加入 15 秒无字幕演示。
+          - 火苗探索主题：小火堆起点、火苗与火星尾迹、洞口出口；墙壁与打通区域保持透明。
+          - 保留原迷宫算法，计算移至独立线程；生成时显示加载圈，可随时退出并终止计算。
+          - 五级成长与新经验曲线，累计 150,000 经验满级；已有经验保留。
+          - 简体中文、日文、英文自动跟随浏览器语言；品牌名统一为「迷页」。
+          - 修复窗口尺寸变化后重试截图可能包含悬浮栏的问题。
+
+          **安装**：下载 `Miye-v3.1.0.zip` 并解压，在 Chrome / Edge 扩展管理页开启开发者模式，选择「加载已解压的扩展程序」。需要浏览器 109 及以上版本。
+
+          **升级**：覆盖原安装目录，重新加载扩展并刷新网页；不要卸载原扩展，以保留本地经验。新增 `offscreen` 权限用于本地迷宫计算，如浏览器提示权限变更，请确认后重新启用。
+
+          [使用指南](https://github.com/KINO-L/PagePath/blob/v3.1.0/docs/USAGE.md) · [隐私说明](https://github.com/KINO-L/PagePath/blob/v3.1.0/docs/PRIVACY.md)
+          '@
+          $notesPath = Join-Path $env:RUNNER_TEMP 'miye-v3.1.0-notes.md'
+          [IO.File]::WriteAllText($notesPath, $notes, [Text.UTF8Encoding]::new($false))
+          $releaseList = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read releases.' }
+          $existing = @($releaseList | Where-Object tag_name -eq $tag)
+          if ($existing.Count -gt 1) { throw 'Unexpected duplicate releases.' }
+          $refs = gh api "repos/$repo/git/matching-refs/tags/$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify version tag.' }
+          $existingRef = @($refs | Where-Object ref -eq "refs/tags/$tag")
+          if ($existingRef.Count -gt 0 -and ($existingRef[0].object.type -ne 'commit' -or $existingRef[0].object.sha -ne $commit)) { throw 'Version tag points to a different commit.' }
+          if ($existing.Count -eq 0) {
+            gh release create $tag $archive --repo $repo --target $commit --title '迷页 v3.1.0' --notes-file $notesPath --latest
+            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed.' }
+          } else {
+            $release = $existing[0]
+            if ($release.draft -and $release.target_commitish -ne $commit) { throw 'Draft targets a different commit.' }
+            if (-not $release.draft -and $existingRef.Count -ne 1) { throw 'Published release tag is missing.' }
+            if (-not @($release.assets | Where-Object name -eq 'Miye-v3.1.0.zip').Count) {
+              gh release upload $tag $archive --repo $repo
+              if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed.' }
+            }
+            gh release edit $tag --repo $repo --draft=false --notes-file $notesPath --latest
+            if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
+          }
+          gh release view $tag --repo $repo --json url,tagName,isDraft,assets
+          if ($LASTEXITCODE -ne 0) { throw 'Release verification failed.' }
