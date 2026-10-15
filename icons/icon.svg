@@ -1,9 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <rect x="2" y="2" width="124" height="124" rx="28" fill="#f4f0e7" stroke="#d8d1c4" stroke-width="2"/>
-  <path d="M81 23c4-4 9-4 13 0s4 9 0 13L64 70 51 57Z" fill="#282824"/>
-  <path d="m57 57 8 7 22-25" fill="none" stroke="#b9a383" stroke-width="3" stroke-linecap="round"/>
-  <path d="m51 59 12 12c-3 17-15 18-28 27 6-11 2-28 16-39Z" fill="#282824"/>
-  <path d="M47 77c1 7-1 12-6 16" fill="none" stroke="#f4f0e7" stroke-opacity=".65" stroke-width="2" stroke-linecap="round"/>
-  <path d="M32 101c15 4 34 2 47-4" fill="none" stroke="#282824" stroke-width="4" stroke-linecap="round"/>
-  <rect x="86" y="84" width="15" height="16" rx="3" fill="#a14e3d"/>
+  <rect x="2" y="2" width="124" height="124" rx="29" fill="#f5f0e5"/>
+  <path d="M22 105V65c0-26 17-46 42-46s42 20 42 46v40Z" fill="#315b4c"/>
+  <path d="M37 105V66c0-18 10-32 27-32s27 14 27 32v39Z" fill="#193d35"/>
+  <path d="M65 46c3 17 20 22 20 38 0 13-9 22-21 22S43 97 43 84c0-12 7-18 12-25 0 9 2 12 5 15 6-9 7-18 5-28Z" fill="#f2ad45"/>
+  <path d="M64 79c2 7 9 10 9 17a9 9 0 0 1-18 0c0-7 6-11 9-17Z" fill="#fff0c4"/>
 </svg>

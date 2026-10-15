@@ -1,14 +1,14 @@
 {
-  "name": "pagepath",
-  "version": "3.0.0",
+  "name": "miye",
+  "version": "3.1.0",
   "private": true,
-  "description": "Turn webpages into ink-brush mazes with randomized difficulty, scores and local progression. A Manifest V3 browser extension.",
+  "description": "Explore webpage mazes as a tiny flame, from campfire to cave exit, with randomized difficulty, experience bubbles and local progression. A Manifest V3 browser extension.",
   "homepage": "https://github.com/KINO-L/PagePath#readme",
   "repository": { "type": "git", "url": "https://github.com/KINO-L/PagePath.git" },
   "bugs": { "url": "https://github.com/KINO-L/PagePath/issues" },
   "engines": { "node": ">=20" },
   "scripts": {
-    "test": "node --test tests/core.test.cjs tests/difficulty.test.cjs tests/modes.test.cjs tests/variation.test.cjs tests/trail.test.cjs tests/extension.test.cjs tests/game.test.cjs tests/scoring.test.cjs tests/pixel-map.test.cjs tests/map-codec.test.cjs tests/compact-mask.test.cjs tests/maze.test.cjs tests/maze-cleanup.test.cjs tests/maze-noisy.test.cjs tests/maze-route.test.cjs tests/maze-connectors.test.cjs",
+    "test": "node --test tests/i18n.test.cjs tests/core.test.cjs tests/difficulty.test.cjs tests/modes.test.cjs tests/variation.test.cjs tests/trail.test.cjs tests/extension.test.cjs tests/game.test.cjs tests/generation-host.test.cjs tests/maze-client.test.cjs tests/maze-worker.test.cjs tests/scoring.test.cjs tests/pixel-map.test.cjs tests/map-codec.test.cjs tests/page-snapshot.test.cjs tests/compact-mask.test.cjs tests/maze.test.cjs tests/maze-cleanup.test.cjs tests/maze-noisy.test.cjs tests/maze-route.test.cjs tests/maze-connectors.test.cjs",
     "test:maze": "node --test tests/maze.test.cjs tests/maze-cleanup.test.cjs tests/maze-noisy.test.cjs tests/maze-route.test.cjs tests/maze-connectors.test.cjs",
     "test:browser": "node tests/mv3.test.cjs",
     "test:analysis": "node tests/page-analysis.cjs",

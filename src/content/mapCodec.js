@@ -6,6 +6,14 @@
     maxCompressedBytes: 42 * MiB, maxMetadataBytes: 3 * MiB, maxPacketChars: 60 * MiB });
   const FORMAT = 'pagepath-pixel-map';
   const fail = reason => new Error(`地图传输失败：${reason}`);
+  const assertActive = signal => {
+    if (signal?.aborted) throw Object.assign(new Error('地图生成已取消'), { name: 'AbortError' });
+  };
+  const yieldToPage = async signal => {
+    assertActive(signal);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assertActive(signal);
+  };
 
   function layout(width, height, segmentValues) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 ||
@@ -84,6 +92,24 @@
     return result;
   }
 
+  async function fromBase64Responsive(text, signal) {
+    if (typeof text !== 'string' || !text.length || text.length % 4 ||
+        text.length > Math.ceil(LIMITS.maxCompressedBytes / 3) * 4) throw fail('压缩地图长度无效');
+    const length = text.length / 4 * 3 - (text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0);
+    if (length > LIMITS.maxCompressedBytes) throw fail('压缩地图超过传输上限');
+    const result = new Uint8Array(length);
+    for (let offset = 0, written = 0; offset < text.length; offset += 262144) {
+      await yieldToPage(signal);
+      let binary;
+      try { binary = atob(text.slice(offset, offset + 262144)); }
+      catch { throw fail('压缩地图编码无效'); }
+      if (written + binary.length > length) throw fail('压缩地图编码无效');
+      for (let i = 0; i < binary.length; i++) result[written++] = binary.charCodeAt(i);
+      if (offset + 262144 >= text.length && written !== length) throw fail('压缩地图编码无效');
+    }
+    return result;
+  }
+
   function requireStreams() {
     if (typeof CompressionStream !== 'function' || typeof DecompressionStream !== 'function' ||
         typeof ReadableStream !== 'function') throw fail('当前浏览器不支持地图压缩，请更新浏览器');
@@ -121,10 +147,11 @@
       segmentValues, byteLength: format.byteLength, metadata: meta.value, payload };
   }
 
-  function rebuildContours(segments, width, height, bucketSize) {
+  async function rebuildContours(segments, width, height, bucketSize, options) {
     const buckets = Object.create(null);
     let entries = 0;
     for (let i = 0; i < segments.length; i += 4) {
+      if (options.cooperative && i % 16384 === 0) await yieldToPage(options.signal);
       const x1 = segments[i], y1 = segments[i + 1], x2 = segments[i + 2], y2 = segments[i + 3];
       if (![x1, y1, x2, y2].every(Number.isFinite) ||
           Math.min(x1, x2) < 0 || Math.min(y1, y2) < 0 || Math.max(x1, x2) > width || Math.max(y1, y2) > height ||
@@ -140,7 +167,8 @@
     return { segments, bucketSize, buckets };
   }
 
-  async function decode(packet) {
+  async function decode(packet, { signal, cooperative = false } = {}) {
+    assertActive(signal);
     requireStreams();
     if (!packet || packet.format !== FORMAT || packet.version !== 1 || packet.encoding !== 'gzip-base64') {
       throw fail('地图数据格式或版本无效');
@@ -151,10 +179,11 @@
     if (typeof packet.payload !== 'string' || packet.payload.length + meta.length + 1024 > LIMITS.maxPacketChars) {
       throw fail('地图超过浏览器消息大小上限');
     }
-    let compressed = fromBase64(packet.payload), raw;
+    let compressed = cooperative ? await fromBase64Responsive(packet.payload, signal) : fromBase64(packet.payload), raw;
     try { raw = await readBounded(readable(compressed).pipeThrough(new DecompressionStream('gzip')), format.byteLength); }
     catch (error) { throw error?.message?.startsWith('地图传输失败') ? error : fail('压缩地图已损坏'); }
     compressed = null;
+    assertActive(signal);
     if (raw.byteLength !== format.byteLength) throw fail('解压后的地图长度不符');
     // All views share one owned buffer, avoiding another full-sized map copy.
     const buffer = raw.buffer;
@@ -164,12 +193,14 @@
     const componentLabels = new Int32Array(buffer, format.labels, format.pixels);
     const segments = new Float32Array(buffer, format.segments, packet.segmentValues);
     for (let i = 0; i < format.pixels; i++) {
+      if (cooperative && i % 262144 === 0) await yieldToPage(signal);
       if (obstacleMask[i] > 1 || walkableMask[i] > 1 || !Number.isFinite(distanceMap[i]) || distanceMap[i] < 0 ||
           componentLabels[i] < 0 || (walkableMask[i] && (!componentLabels[i] || obstacleMask[i]))) {
         throw fail('地图像素内容无效');
       }
     }
-    const contours = rebuildContours(segments, packet.width, packet.height, meta.value.bucketSize);
+    const contours = await rebuildContours(segments, packet.width, packet.height, meta.value.bucketSize, { signal, cooperative });
+    assertActive(signal);
     return { kind: 'pixel-mask', width: packet.width, height: packet.height,
       maskWidth: packet.width, maskHeight: packet.height, obstacleMask, walkableMask,
       distanceMap, componentLabels, contours, components: meta.value.components, stats: meta.value.stats };

@@ -7,7 +7,7 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 
-function worker(storageData = {}, sessionData = {}) {
+function worker(storageData = {}, sessionData = {}, locale = 'zh-CN') {
   const handlers = {}, calls = [], injections = [], captures = [], waits = [], imports = [], analyses = [];
   const hintBatches = [];
   const storageCalls = [];
@@ -21,7 +21,8 @@ function worker(storageData = {}, sessionData = {}) {
   let now = 1000;
   class TestDate extends Date { static now() { return now; } }
   const action = Object.fromEntries(['setBadgeText','setBadgeBackgroundColor','setTitle','setPopup','openPopup'].map(method => [method, async data => { calls.push([method, data]); }]));
-  const chrome = { action: { ...action, onClicked: { addListener: f => handlers.click = f } },
+  const chrome = { i18n: { getUILanguage: () => locale },
+    action: { ...action, onClicked: { addListener: f => handlers.click = f } },
     runtime: { id: 'pagepath-test', onMessage: { addListener: f => handlers.message = f } },
     storage: { local: {
       get: async key => {
@@ -41,6 +42,7 @@ function worker(storageData = {}, sessionData = {}) {
     tabs: {
       onUpdated: { addListener: f => handlers.update = f },
       onActivated: { addListener: f => handlers.activate = f },
+      onRemoved: { addListener: f => handlers.remove = f },
       query: async options => {
         calls.push(['query', options]);
         const tab = activeTabs.get(options.windowId);
@@ -68,14 +70,14 @@ function worker(storageData = {}, sessionData = {}) {
       analyses.push({ width: pixels.width, height: pixels.height, bounds });
       return { kind: 'pixel-mask' };
     } }, MapCodec: { encode: async analysis => ({ testEncodedMap: analysis.kind }) } };
-  for (const file of ['config', 'compactMask', 'scoring', 'progression']) {
-    vm.runInNewContext(fs.readFileSync(path.join(root, `src/content/${file}.js`), 'utf8'), { __PAGEPATH__: P });
+  for (const file of ['i18n', 'config', 'compactMask', 'scoring', 'progression']) {
+    vm.runInNewContext(fs.readFileSync(path.join(root, `src/content/${file}.js`), 'utf8'), { __PAGEPATH__: P, chrome });
   }
   class Canvas {
     constructor(width, height) { this.width = width; this.height = height; }
     getContext() { return { drawImage() {}, getImageData: () => ({ width: this.width, height: this.height }) }; }
   }
-  vm.runInNewContext(fs.readFileSync(path.join(root,'src/background.js'),'utf8'), {
+  const context = vm.createContext({
     chrome, URL, Set, Map, Promise, Date: TestDate, Blob, Uint8Array, atob, TextEncoder,
     __PAGEPATH__: P, importScripts: (...files) => imports.push(...files), OffscreenCanvas: Canvas,
     createImageBitmap: async () => ({ width: 1200, height: 800, close() { calls.push(['closeBitmap']); } }),
@@ -87,6 +89,8 @@ function worker(storageData = {}, sessionData = {}) {
     },
     clearTimeout: id => backgroundTimers.delete(id),
   });
+  vm.runInContext(fs.readFileSync(path.join(root, 'src/generationHost.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(root,'src/background.js'),'utf8'), context);
   function request(sender = {}, message = {}) {
     const origin = { id: chrome.runtime.id, frameId: 0, tab: { ...activeTabs.get(3) },
       url: 'https://example.com/article', ...sender };
@@ -106,7 +110,8 @@ function worker(storageData = {}, sessionData = {}) {
 test('MV3 package has minimal permissions, local assets, ordered scripts and strict CSP', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8'));
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(manifest.permissions, ['activeTab','scripting','storage']);
+  assert.deepEqual(manifest.permissions, ['activeTab','scripting','storage','offscreen']);
+  assert.equal(manifest.minimum_chrome_version, '109');
   assert.equal(manifest.host_permissions, undefined);
   assert.equal(manifest.action.default_popup, undefined);
   assert.equal(manifest.web_accessible_resources, undefined);
@@ -123,6 +128,44 @@ test('extension and development package publish the same three-part version', ()
   assert.equal(manifest.version, packageInfo.version);
 });
 
+test('extension metadata has complete English, Japanese and Simplified Chinese translations', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.default_locale, 'en');
+  const fields = [manifest.name, manifest.description, manifest.action.default_title];
+  assert.ok(fields.every(value => /^__MSG_\w+__$/.test(value)));
+  for (const locale of ['en', 'ja', 'zh_CN']) {
+    const messages = JSON.parse(fs.readFileSync(path.join(root, `_locales/${locale}/messages.json`), 'utf8'));
+    for (const value of fields) assert.ok(messages[value.slice(6, -2)]?.message.trim(), `${locale}: ${value}`);
+    assert.ok(messages.extensionDescription.message.length <= 132, `${locale}: Chrome description limit`);
+    if (locale === 'en') assert.doesNotMatch(messages.extensionDescription.message, /[\u3400-\u9fff]/);
+  }
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(root, '_locales/zh_TW/messages.json'), 'utf8')),
+    JSON.parse(fs.readFileSync(path.join(root, '_locales/zh_CN/messages.json'), 'utf8')),
+    'the Chinese regional fallback uses the same Simplified Chinese translation');
+});
+
+test('restricted-page popup loads CSP-safe scripts and follows the browser UI language', () => {
+  const html = fs.readFileSync(path.join(root, 'src/unavailable.html'), 'utf8');
+  const scripts = [...html.matchAll(/<script\s+src="([^"]+)"\s+defer><\/script>/g)].map(match => match[1]);
+  assert.deepEqual(scripts, ['content/i18n.js', 'unavailable.js']);
+  assert.equal((html.match(/<script\b/g) || []).length, scripts.length, 'no inline script');
+  for (const [locale, expectedLang] of [['zh-CN', 'zh-CN'], ['ja-JP', 'ja'], ['en-US', 'en'], ['fr-FR', 'en']]) {
+    const elements = [...html.matchAll(/data-i18n="([^"]+)"/g)].map(match => ({ dataset: { i18n: match[1] }, textContent: '' }));
+    assert.equal(elements.length, 4);
+    const document = { documentElement: { lang: '' }, querySelectorAll: () => elements };
+    const context = vm.createContext({ document, chrome: { i18n: { getUILanguage: () => locale } } });
+    for (const file of scripts) vm.runInContext(fs.readFileSync(path.join(root, 'src', file), 'utf8'), context);
+    assert.equal(document.documentElement.lang, expectedLang);
+    for (const element of elements) {
+      assert.ok(element.textContent.trim());
+      if (expectedLang === 'zh-CN') assert.equal(element.textContent, element.dataset.i18n);
+      else assert.notEqual(element.textContent, element.dataset.i18n, `${locale}: ${element.dataset.i18n}`);
+      if (expectedLang === 'en') assert.doesNotMatch(element.textContent.replaceAll('迷页', ''), /[\u3400-\u9fff]/);
+    }
+  }
+});
+
 test('release archive contains only installable assets and user documentation', { skip: process.platform !== 'win32' }, t => {
   const temporaryRoot = fs.realpathSync(os.tmpdir());
   const fixtureRoot = fs.mkdtempSync(path.join(temporaryRoot, 'pagepath-release-test-'));
@@ -131,7 +174,7 @@ test('release archive contains only installable assets and user documentation', 
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   });
   const fixtureFiles = {
-    'manifest.json': JSON.stringify({ version: '1.0.0', name: 'PagePath · 网页一笔画', description: '把截图变成地图。', background: { service_worker: 'src/background.js' }, icons: { 16: 'icons/icon16.png' } }),
+    'manifest.json': JSON.stringify({ version: '1.0.0', default_locale: 'en', name: '__MSG_extensionName__', description: '__MSG_extensionDescription__', background: { service_worker: 'src/background.js' }, icons: { 16: 'icons/icon16.png' } }),
     'README.md': 'Release introduction',
     'docs/USAGE.md': 'User instructions',
     'docs/PRIVACY.md': 'Privacy statement',
@@ -153,7 +196,11 @@ test('release archive contains only installable assets and user documentation', 
     'vendor/opencv/LICENSE.emscripten': 'Emscripten license',
     'vendor/opencv/README.md': 'Runtime provenance',
     'vendor/opencv/prepare.cjs': 'Do not package developer utilities',
+    '_locales/translation-notes.md': 'Do not package translation notes',
   };
+  for (const locale of ['en', 'ja', 'zh_CN', 'zh_TW']) {
+    fixtureFiles[`_locales/${locale}/messages.json`] = fs.readFileSync(path.join(root, `_locales/${locale}/messages.json`), 'utf8');
+  }
   for (const [relativePath, contents] of Object.entries(fixtureFiles)) {
     const destination = path.join(fixtureRoot, relativePath);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -162,7 +209,7 @@ test('release archive contains only installable assets and user documentation', 
   fs.mkdirSync(path.join(fixtureRoot, 'scripts'));
   const packageScript = path.join(fixtureRoot, 'scripts/package.ps1');
   fs.copyFileSync(path.join(root, 'scripts/package.ps1'), packageScript);
-  const archivePath = path.join(fixtureRoot, 'dist/PagePath-v1.0.0.zip');
+  const archivePath = path.join(fixtureRoot, 'dist/Miye-v1.0.0.zip');
   // A second run must safely replace the same release without removing older archives.
   for (let run = 0; run < 2; run++) {
     const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', packageScript], {
@@ -192,9 +239,16 @@ test('release archive contains only installable assets and user documentation', 
     'README.md', 'docs/PRIVACY.md', 'docs/USAGE.md', 'icons/icon.svg',
     'icons/icon16.png', 'manifest.json', 'src/background.js', 'src/content/styles.css',
     'vendor/opencv/opencv.js', 'vendor/opencv/LICENSE', 'vendor/opencv/LICENSE.emscripten', 'vendor/opencv/README.md',
+    '_locales/en/messages.json', '_locales/ja/messages.json', '_locales/zh_CN/messages.json', '_locales/zh_TW/messages.json',
   ].sort());
   assert.equal(fs.readFileSync(path.join(fixtureRoot, 'dist/old-release.zip'), 'utf8'), fixtureFiles['dist/old-release.zip']);
   assert.ok(!fs.readdirSync(path.join(fixtureRoot, 'dist')).some(name => name.endsWith('.tmp')));
+  fs.writeFileSync(path.join(fixtureRoot, '_locales/ja/messages.json'), '{}');
+  const incomplete = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', packageScript], {
+    encoding: 'utf8', timeout: 30000, windowsHide: true,
+  });
+  assert.notEqual(incomplete.status, 0, 'incomplete locales must fail before creating a release');
+  assert.match(incomplete.stderr, /Missing locale message/);
 });
 
 test('toolbar injects locally into the top frame isolated world', async () => {
@@ -204,6 +258,7 @@ test('toolbar injects locally into the top frame isolated world', async () => {
   assert.equal(injections[0].world, 'ISOLATED');
   assert.deepEqual(Array.from(injections[0].target.frameIds), [0]);
   assert.equal(injections[0].files.at(-1), 'src/content/index.js');
+  assert.equal(injections[0].files[0], 'src/content/i18n.js');
   assert.ok(injections[0].files.indexOf('src/content/pageSnapshot.js') < injections[0].files.indexOf('src/content/game.js'));
   for (const file of injections[0].files) assert.ok(fs.existsSync(path.join(root,file)));
   assert.ok(injections[0].files.includes('src/content/mapCodec.js'));
@@ -212,6 +267,7 @@ test('toolbar injects locally into the top frame isolated world', async () => {
   assert.ok(!injections[0].files.some(file => /obstacleDetector|pageAnalyzer/.test(file)), 'legacy DOM obstacle discovery is no longer injected');
   assert.ok(!injections[0].files.some(file => /opencv|imageMapAnalyzer/i.test(file)), 'webpages receive cached maps, not WASM');
   assert.ok(imports.includes('../vendor/opencv/opencv.js'));
+  assert.equal(imports[0], 'content/i18n.js');
   assert.ok(imports.includes('content/imageMapAnalyzer.js'));
   assert.ok(imports.includes('content/compactMask.js'));
   assert.ok(imports.includes('content/scoring.js'));
@@ -229,6 +285,23 @@ test('system pages and extension stores show an explanation without injection', 
   }
 });
 
+test('browser action titles use the UI locale and retain localized defaults after navigation', async () => {
+  for (const [locale, resource] of [['zh-CN', 'zh_CN'], ['ja-JP', 'ja'], ['en-US', 'en'], ['de-DE', 'en']]) {
+    const { handlers, calls } = worker({}, {}, locale);
+    const messages = JSON.parse(fs.readFileSync(path.join(root, `_locales/${resource}/messages.json`), 'utf8'));
+    await handlers.click({ id: 7, url: 'https://example.com/article' });
+    assert.ok(calls.some(([type, data]) => type === 'setTitle' && data.title === messages.extensionActionTitle.message), locale);
+    await handlers.click({ id: 9, url: 'chrome://extensions' });
+    const restricted = calls.filter(([type, data]) => type === 'setTitle' && data.tabId === 9).at(-1)[1].title;
+    assert.ok(restricted.trim());
+    if (resource === 'en') assert.doesNotMatch(restricted, /[\u3400-\u9fff]/);
+    if (resource === 'ja') assert.match(restricted, /[\u3040-\u30ff]/);
+    handlers.update(9, { status: 'loading' });
+    const reset = calls.filter(([type, data]) => type === 'setTitle' && data.tabId === 9).at(-1)[1].title;
+    assert.equal(reset, messages.extensionActionTitle.message);
+  }
+});
+
 test('injection denial is contained and navigation resets the restricted popup', async () => {
   const { handlers, calls, chrome } = worker();
   chrome.scripting.executeScript = async () => { throw new Error('Cannot access contents'); };
@@ -238,9 +311,38 @@ test('injection denial is contained and navigation resets the restricted popup',
 });
 
 test('Escape/Exit status message clears the originating tab badge', () => {
-  const { handlers, calls } = worker();
-  handlers.message({ type: 'PAGEPATH_CLOSED' }, { tab: { id: 8 } });
+  const { handlers, calls, chrome } = worker();
+  handlers.message({ type: 'PAGEPATH_CLOSED' }, { id: chrome.runtime.id, frameId: 0,
+    tab: { id: 8, url: 'https://example.com/' }, url: 'https://example.com/' });
   assert.ok(calls.some(([type, data]) => type === 'setBadgeText' && data.tabId === 8 && data.text === ''));
+});
+
+test('capture restores the generating controls after PNG acquisition and before analysis', async () => {
+  const w = worker();
+  const notifications = [];
+  w.chrome.tabs.sendMessage = async (tabId, message, target) => {
+    assert.equal(w.captures.length, 1);
+    assert.equal(w.analyses.length, 0, 'the spinner and exit return before heavy OpenCV analysis');
+    notifications.push({ tabId, message, target });
+  };
+  const response = await w.request({ documentId: 'document-7' }, { captureId: 'capture-id' });
+  assert.equal(response.ok, true);
+  assert.equal(notifications[0].tabId, 7);
+  assert.equal(notifications[0].message.type, 'PAGEPATH_CAPTURE_READY');
+  assert.equal(notifications[0].message.captureId, 'capture-id');
+  assert.equal(notifications[0].target.documentId, 'document-7');
+});
+
+test('closing, navigation and tab removal forward generation cancellation', () => {
+  const w = worker(), cancelled = [];
+  w.chrome.runtime.sendMessage = async message => { cancelled.push(message); };
+  w.handlers.message({ type: 'PAGEPATH_CLOSED' }, { id: w.chrome.runtime.id, frameId: 0,
+    tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/', documentId: 'old-document' });
+  w.handlers.update(8, { status: 'loading' });
+  w.handlers.remove(9);
+  assert.ok(cancelled.some(message => message.type === 'PAGEPATH_OFFSCREEN_CANCEL_OWNER' && message.owner.documentId === 'old-document'));
+  assert.ok(cancelled.some(message => message.type === 'PAGEPATH_OFFSCREEN_CANCEL_TAB' && message.tabId === 8));
+  assert.ok(cancelled.some(message => message.type === 'PAGEPATH_OFFSCREEN_CANCEL_TAB' && message.tabId === 9));
 });
 
 test('snapshot captures only the requesting active tab and returns PNG without extra permissions', async () => {

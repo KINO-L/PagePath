@@ -41,10 +41,22 @@ module.exports = async function installScreenshotHarness(page) {
   await page.exposeFunction('__pagepathCaptureViewport', async () =>
     'data:image/png;base64,' + (await page.screenshot({ type: 'png' })).toString('base64'));
   await page.addInitScript(() => {
+    const listeners = new Set(), jobs = new Map();
     globalThis.chrome ||= {};
     globalThis.chrome.runtime = {
       id: 'pagepath-browser-test',
+      onMessage: { addListener: listener => listeners.add(listener), removeListener: listener => listeners.delete(listener) },
       async sendMessage(message) {
+        if (message.type === 'PAGEPATH_GENERATE') return new Promise(resolve => {
+          const worker = new Worker('/src/mazeWorker.js');
+          const finish = response => { worker.terminate(); jobs.delete(message.requestId); resolve(response); };
+          jobs.set(message.requestId, () => finish({ ok: false, cancelled: true }));
+          worker.onmessage = event => finish(event.data);
+          worker.onerror = () => finish({ ok: false, error: '地图暂未准备好，请刷新后重试' });
+          worker.postMessage(message);
+        });
+        if (message.type === 'PAGEPATH_CANCEL_GENERATION') { jobs.get(message.requestId)?.(); return { ok: true }; }
+        if (message.type === 'PAGEPATH_CLOSED') { for (const cancel of [...jobs.values()]) cancel(); return; }
         if (message.type === 'PAGEPATH_PROFILE' || message.type === 'PAGEPATH_COMPLETE') {
           return globalThis.__pagepathProgress(message);
         }
@@ -52,6 +64,8 @@ module.exports = async function installScreenshotHarness(page) {
           const before = globalThis.__PAGEPATH__.CompactDOM?.collect(message.bounds) || [];
           const dataUrl = await globalThis.__pagepathCaptureViewport();
           const after = globalThis.__PAGEPATH__.CompactDOM?.collect(message.bounds) || [];
+          for (const listener of listeners) listener({ type: 'PAGEPATH_CAPTURE_READY', captureId: message.captureId },
+            { id: 'pagepath-browser-test' });
           const image = await createImageBitmap(await (await fetch(dataUrl)).blob());
           try {
             const { width, height } = message.bounds;

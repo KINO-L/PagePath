@@ -179,7 +179,7 @@ for(const kind of ['blank','solid','cards','mixed','noise']) test(kind+' screens
     assert.equal(level.maze.construction.uniqueStartFinish,true);
     const opened=new Uint8Array(source.width*source.height);
     for(const r of level.mazeOpenings)for(let y=r.y;y<r.y+r.height;y++)opened.fill(1,y*source.width+r.x,y*source.width+r.x+r.width);
-    for(let i=0;i<opened.length;i++)if(source.obstacleMask[i]&&!level.analysis.obstacleMask[i]) assert.equal(opened[i],1,'opened foreground is visibly declared');
+    for(let i=0;i<opened.length;i++)if(source.obstacleMask[i]&&!level.analysis.obstacleMask[i]) assert.equal(opened[i],1,'opened foreground is recorded in map metadata');
     assert.deepEqual(source.obstacleMask,before);
     pixelPortalAudit(level);
     if (['blank','cards','mixed'].includes(kind)) pagePreservationAudit(level,source,kind);

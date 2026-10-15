@@ -1,4 +1,4 @@
-// Real unpacked MV3 smoke test: original permissions, isolated-world game,
+// Real unpacked MV3 smoke test: activeTab access, cancellable extension workers,
 // screenshot analysis, genuine mouse input and persistent extension storage.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -13,8 +13,8 @@ const candidate = process.env.PAGEPATH_BROWSER || (process.platform === 'win32'
   ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : undefined);
 const executablePath = candidate && fs.existsSync(candidate) ? candidate : undefined;
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
-async function until(read, predicate, label) {
-  const deadline = Date.now() + 60000;
+async function until(read, predicate, label, timeout = 60000) {
+  const deadline = Date.now() + timeout;
   let value;
   do {
     value = await read();
@@ -41,6 +41,7 @@ async function until(read, predicate, label) {
   const temporaryRoot = fs.realpathSync(os.tmpdir());
   const profile = fs.mkdtempSync(path.join(temporaryRoot, 'pagepath-mv3-'));
   const errors = [];
+  const cancellationTimes = [];
   let context, worker, browserCDP, extensionId;
   async function launch() {
     context = await playwright.chromium.launchPersistentContext(profile, {
@@ -55,6 +56,7 @@ async function until(read, predicate, label) {
     assert.match(worker.url(), /\/src\/background\.js$/);
     await until(() => worker.evaluate(() => chrome.action.onClicked.hasListeners()), Boolean, 'extension action registration');
     browserCDP = await context.browser().newBrowserCDPSession();
+    await browserCDP.send('Target.setDiscoverTargets', { discover: true, filter: [{}] });
   }
   async function action(page) {
     await page.bringToFront();
@@ -70,10 +72,11 @@ async function until(read, predicate, label) {
       target: { tabId }, world: 'ISOLATED', func: () => {
         const game = globalThis.__PAGEPATH__?.instance;
         if (!game) return null;
-        return { state: game.state, difficulty: game.level?.difficulty, stars: game.level?.stars,
+        return { state: game.state, locale: globalThis.__PAGEPATH__.I18n.locale, difficulty: game.level?.difficulty, stars: game.level?.stars,
           nodes: game.level?.nodes.length, referencePath: game.level?.referencePath,
           referenceLength: game.level?.referenceLength, message: game.message, generationFailed: game.generationFailed,
           snapshotMode: game.snapshot?.mode, mapKind: game.analysis?.kind,
+          snapshotSize: game.snapshot?.analysis && { width: game.snapshot.analysis.width, height: game.snapshot.analysis.height },
           sharedMask: game.collisionIndex?.walkableMask === game.analysis?.walkableMask,
           unique: game.level?.maze?.construction?.uniqueStartFinish,
           profile: game.profile, result: game.result, run: game.run,
@@ -84,6 +87,10 @@ async function until(read, predicate, label) {
           timeControls: game.overlay.shadowRoot.querySelectorAll('.timer-value,.hud-timer').length,
           cursor: getComputedStyle(game.overlay.surface).cursor,
           toolbarVisible: getComputedStyle(game.overlay.toolbar.querySelector('.toolbar-main')).visibility,
+          loadingAnimation: getComputedStyle(game.overlay.toolbar.querySelector('.status-icon')).animationName,
+          loadingTransform: getComputedStyle(game.overlay.toolbar.querySelector('.status-icon')).transform,
+          busy: game.overlay.toolbar.getAttribute('aria-busy'),
+          exitEnabled: !game.overlay.exitButton.disabled && !game.overlay.toolbarMain.inert,
           modes: game.overlay.shadowRoot.querySelectorAll('.mode-button').length,
           resultPanels: game.overlay.shadowRoot.querySelectorAll('.result-panel').length,
           starLabel: game.overlay.toolbar.querySelector('.star-rating')?.getAttribute('aria-label'),
@@ -102,6 +109,62 @@ async function until(read, predicate, label) {
   }
   const ready = tabId => until(() => readGame(tabId), value => value?.state === 'READY', 'maze ready');
   const gone = page => page.waitForFunction(() => !document.querySelector('[data-pagepath-root]'));
+  async function mazeWorkers() {
+    const { targetInfos } = await browserCDP.send('Target.getTargets', { filter: [{}] });
+    // Edge leaves extension-created worker URLs empty. This fresh profile only
+    // loads PagePath, and the fixture's script-src 'none' rules out page workers.
+    return targetInfos.filter(target => target.type === 'worker' &&
+      (!target.url || target.url === `chrome-extension://${extensionId}/src/mazeWorker.js`));
+  }
+  async function checkCancellableGeneration(page, tabId) {
+    await page.setViewportSize({ width: 3840, height: 2160 });
+    try {
+      for (const method of ['button', 'escape', 'right']) {
+        await action(page);
+        const started = await until(async () => ({ game: await readGame(tabId), workers: await mazeWorkers() }),
+          value => {
+            if (value.game?.generationFailed) assert.fail('4K worker startup: ' + value.game.message);
+            return value.game?.state === 'GENERATING' && value.workers.length > 0;
+          }, 'dedicated maze worker running on a 4K blank webpage');
+        assert.equal(started.workers.length, 1, 'one dedicated worker serves the active map');
+        assert.deepEqual(started.game.snapshotSize, { width: 3840, height: 2160 });
+        assert.equal(started.game.toolbarVisible, 'visible');
+        assert.equal(started.game.loadingAnimation, 'map-loading');
+        assert.equal(started.game.busy, 'true'); assert.equal(started.game.exitEnabled, true);
+        const heartbeat = await page.evaluate(async () => {
+          const start = performance.now(); let previous = start, maximumGap = 0;
+          for (let frames = 0; frames < 8; frames++) {
+            const now = await new Promise(requestAnimationFrame);
+            maximumGap = Math.max(maximumGap, now - previous); previous = now;
+          }
+          return { elapsed: performance.now() - start, maximumGap };
+        });
+        assert.ok(heartbeat.elapsed < 1000 && heartbeat.maximumGap < 500,
+          'page animation frames remain responsive during real 4K maze computation: ' + JSON.stringify(heartbeat));
+        const animated = await readGame(tabId);
+        assert.equal(animated.state, 'GENERATING', 'cancellation is exercised while the large maze is still running');
+        assert.notEqual(animated.loadingTransform, started.game.loadingTransform,
+          'the actual extension loading indicator continues rotating while the worker computes');
+        assert.ok((await mazeWorkers()).some(target => target.targetId === started.workers[0].targetId));
+        const beforeExit = performance.now();
+        if (method === 'button') await page.locator('[data-pagepath-root] .exit').click();
+        else if (method === 'escape') await page.keyboard.press('Escape');
+        else await page.mouse.click(10, 150, { button: 'right' });
+        await gone(page);
+        const exitMs = performance.now() - beforeExit;
+        assert.ok(exitMs < 1000, method + ': exit removes the overlay within one second, got ' + Math.round(exitMs) + ' ms');
+        await until(mazeWorkers, targets => !targets.some(target => target.targetId === started.workers[0].targetId),
+          method + ': cancelling terminates the actual maze worker', 5000);
+        await page.evaluate(async () => {
+          await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+        });
+        assert.equal(await readGame(tabId), null, 'late worker replies never resurrect a closed game');
+        assert.equal(await page.locator('[data-pagepath-root]').count(), 0);
+        assert.equal((await savedProfile())?.totalRuns || 0, 0, 'cancelled maps do not award experience');
+        cancellationTimes.push(method + ' ' + Math.round(exitMs) + ' ms');
+      }
+    } finally { await page.setViewportSize({ width: 1280, height: 900 }); }
+  }
   async function routeThroughBubble(tabId) {
     const [read] = await worker.evaluate(tabId => chrome.scripting.executeScript({
       target: { tabId }, world: 'ISOLATED', func: () => {
@@ -194,7 +257,7 @@ async function until(read, predicate, label) {
     assert.equal(finished.xpInToolbar, true);
     assert.equal(finished.xpVisible, true);
     assert.equal(finished.starsVisible, false);
-    assert.equal(finished.xpText, `+${finished.result.xp}`);
+    assert.equal(finished.xpText, `+${finished.result.xp.toLocaleString(finished.locale)}`);
     assert.equal(finished.saveControls, 0);
     return finished;
   }
@@ -202,8 +265,9 @@ async function until(read, predicate, label) {
   try {
     await launch();
     const manifest = await worker.evaluate(() => chrome.runtime.getManifest());
-    assert.equal(manifest.version, '3.0.0');
-    assert.deepEqual(manifest.permissions, ['activeTab', 'scripting', 'storage']);
+    assert.equal(manifest.version, JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8')).version);
+    assert.equal(manifest.name, await worker.evaluate(() => chrome.i18n.getMessage('extensionName')));
+    assert.deepEqual(manifest.permissions, ['activeTab', 'scripting', 'storage', 'offscreen']);
     assert.equal(manifest.host_permissions, undefined);
     const page = await context.newPage();
     await page.goto(`${origin}/blank`);
@@ -212,6 +276,7 @@ async function until(read, predicate, label) {
       try { await chrome.scripting.executeScript({ target: { tabId }, func: () => true }); return false; }
       catch { return true; }
     }, tabId), true, 'activeTab requires a real extension action');
+    await checkCancellableGeneration(page, tabId);
     await action(page);
     await ready(tabId);
     assert.equal(await page.evaluate(() => typeof globalThis.__PAGEPATH__), 'undefined');
@@ -262,7 +327,8 @@ async function until(read, predicate, label) {
     await restartedPage.keyboard.press('Escape');
     await gone(restartedPage);
     assert.deepEqual(errors, [], 'no browser JavaScript or CSP errors');
-    console.log('MV3 maze smoke passed: one guaranteed visible breathing multiplier per map, genuine pickup, difficulty-only score, collectible XP and automatic persistence across storage failures, game exit and browser restart.');
+    console.log('MV3 maze smoke passed: responsive 4K worker cancellation (' + cancellationTimes.join(', ') +
+      '), one guaranteed visible breathing multiplier per map, genuine pickup, difficulty-only score, collectible XP and automatic persistence across storage failures, game exit and browser restart.');
   } finally {
     try { await context?.close(); }
     finally {

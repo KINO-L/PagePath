@@ -107,34 +107,89 @@ test('invalid numeric input stays finite and output rewards are rounded to integ
 test('XP is cumulative, level thresholds rise, and a reward can cross multiple levels and titles', () => {
   const initial = P.empty();
   assert.equal(P.view(initial).level, 1);
-  assert.equal(P.view(initial).nextLevelXp, 120);
-  const first = P.award(initial, reward('first', 1000, 119));
+  assert.equal(P.view(initial).title, '萌新');
+  assert.equal(P.view(initial).nextLevelXp, 1500);
+  const first = P.award(initial, reward('first', 1000, 1499));
   assert.equal(first.level, 1);
   const second = P.award(first.profile, reward('second', 1000, 1));
   assert.equal(second.level, 2);
+  assert.equal(second.title, '糕手');
   assert.equal(second.currentXp, 0);
-  assert.equal(second.nextLevelXp, 180);
+  assert.equal(second.nextLevelXp, 13500);
   assert.equal(second.leveledUp, true);
-  const third = P.award(second.profile, reward('third', 3000, 1000));
-  assert.ok(third.levelsGained > 1 && third.level >= 5);
-  assert.equal(third.title, '识途新秀');
-  assert.equal(third.totalXp, 1120);
+  const third = P.award(second.profile, reward('third', 3000, 58500));
+  assert.equal(third.levelsGained, 2);
+  assert.equal(third.level, 4);
+  assert.equal(third.title, '？？？');
+  assert.equal(third.totalXp, 60000);
   assert.equal(third.wins, 3);
+  const final = P.award(third.profile, reward('final', 3000, 90000));
+  assert.equal(final.level, 5);
+  assert.equal(final.title, '宇宙超级无敌螺旋牛逼');
+  assert.equal(final.levelsGained, 1);
+  assert.equal(final.totalXp, 150000);
+  assert.equal(final.wins, 4);
+  const extra = P.award(final.profile, reward('extra', 1000, 500));
+  assert.equal(extra.level, 5);
+  assert.equal(extra.totalXp, 150500, 'rewards remain saved after reaching the highest rank');
+  assert.equal(extra.leveledUp, false);
+  assert.equal(extra.levelsGained, 0);
   assert.equal(initial.totalXp, 0, 'pure award must not mutate input');
 });
 
 test('level boundary math is exact at each stage and enormous XP is bounded', () => {
-  let cumulative = 0;
-  for (let reached = 2; reached <= 100; reached++) {
-    cumulative += 120 + (reached - 2) * 60;
-    assert.equal(P.view({ totalXp: cumulative - 1 }).level, reached - 1);
-    assert.equal(P.view({ totalXp: cumulative }).level, reached);
+  const thresholds = [0, 1500, 15000, 60000, 150000];
+  const titles = ['萌新', '糕手', '吴迪', '？？？', '宇宙超级无敌螺旋牛逼'];
+  assert.equal(P.RULES.maxLevel, 5);
+  for (let stage = 0; stage < thresholds.length; stage++) {
+    const at = P.view({ totalXp: thresholds[stage] });
+    const above = P.view({ totalXp: thresholds[stage] + 1 });
+    const required = stage < 4 ? thresholds[stage + 1] - thresholds[stage] : 0;
+    assert.equal(at.level, stage + 1);
+    assert.equal(at.title, titles[stage]);
+    assert.equal(at.currentXp, 0);
+    assert.equal(at.nextLevelXp, required);
+    assert.equal(at.progress, stage === 4 ? 1 : 0);
+    assert.equal(at.maxLevel, stage === 4);
+    assert.equal(above.level, stage + 1);
+    assert.equal(above.currentXp, stage === 4 ? 0 : 1);
+    assert.equal(above.progress, stage === 4 ? 1 : 1 / required);
+    if (stage > 0) {
+      const below = P.view({ totalXp: thresholds[stage] - 1 });
+      const previousRequired = thresholds[stage] - thresholds[stage - 1];
+      assert.equal(below.level, stage);
+      assert.equal(below.title, titles[stage - 1]);
+      assert.equal(below.currentXp, previousRequired - 1);
+      assert.equal(below.nextLevelXp, previousRequired);
+      assert.equal(below.progress, (previousRequired - 1) / previousRequired);
+      assert.equal(below.maxLevel, false);
+    }
   }
   const capped = P.view({ totalXp: Number.MAX_VALUE });
-  assert.equal(capped.level, 100);
-  assert.equal(capped.title, '迷宫之神');
+  assert.equal(capped.totalXp, P.RULES.maxTotal);
+  assert.equal(capped.level, 5);
+  assert.equal(capped.title, '宇宙超级无敌螺旋牛逼');
   assert.equal(capped.progress, 1);
+  assert.equal(capped.currentXp, 0);
+  assert.equal(capped.xpIntoLevel, 0);
   assert.equal(capped.nextLevelXp, 0);
+  assert.equal(capped.xpForNextLevel, 0);
+  assert.equal(capped.maxLevel, true);
+});
+
+test('300 successful maps averaging 500 XP reach the highest rank exactly', () => {
+  let profile = P.empty();
+  for (let run = 1; run <= 299; run++) profile = P.award(profile, reward(`average-${run}`, 1000, 500)).profile;
+  const before = P.view(profile);
+  assert.equal(before.totalXp, 149500);
+  assert.equal(before.level, 4);
+  assert.equal(before.nextLevelXp - before.currentXp, 500);
+  const final = P.award(profile, reward('average-300', 1000, 500));
+  assert.equal(final.totalXp, 150000);
+  assert.equal(final.wins, 300);
+  assert.equal(final.level, 5);
+  assert.equal(final.maxLevel, true);
+  assert.equal(final.nextLevelXp, 0);
 });
 
 test('duplicate completions remain deduplicated after storage round-trip', () => {
@@ -153,7 +208,7 @@ test('duplicate completions remain deduplicated after storage round-trip', () =>
   assert.ok(next.profile.recentRuns.every(run => !Object.hasOwn(run, 'mode')));
 });
 
-test('legacy mode profiles migrate without losing levels, totals or settlement IDs', () => {
+test('legacy mode profiles migrate without losing XP, totals or settlement IDs', () => {
   const legacy = { version: 1, totalXp: 1120, totalScore: 8000, totalRuns: 6, bestScore: 1700,
     modeBests: { normal: 1800, hell: 2300 },
     recentRuns: [{ id: 'old-win', score: 2300, xp: 230, mode: 'hell', difficulty: 75, elapsedMs: 50000 }] };
@@ -170,6 +225,34 @@ test('legacy mode profiles migrate without losing levels, totals or settlement I
   assert.equal(migrated.recentRuns[0].elapsedMs, undefined);
   assert.equal(P.award(migrated, reward('old-win')).awarded, false);
   assert.equal(legacy.recentRuns[0].mode, 'hell', 'migration must not mutate a loaded snapshot');
+});
+
+test('existing v3 profiles recalculate all five ranks from saved XP and preserve settlements', () => {
+  for (const [totalXp, expectedLevel, expectedTitle] of [
+    [1120, 1, '萌新'], [14999, 2, '糕手'], [15000, 3, '吴迪'],
+    [120000, 4, '？？？'], [302940, 5, '宇宙超级无敌螺旋牛逼'],
+  ]) {
+    const stored = { version: 3, totalXp, totalScore: 14000, totalRuns: 12, bestScore: 2200,
+      level: 100, title: '迷宫之神', currentXp: 0, nextLevelXp: 0, maxLevel: true,
+      recentRuns: [{ id: 'saved-v3-win', score: 2200, xp: 500, difficulty: 80 }] };
+    const snapshot = plain(stored);
+    const migrated = P.normalize(stored);
+    assert.equal(migrated.version, 3);
+    assert.equal(migrated.totalXp, totalXp);
+    assert.equal(migrated.totalScore, 14000);
+    assert.equal(migrated.totalRuns, 12);
+    assert.equal(migrated.bestScore, 2200);
+    assert.deepEqual(plain(migrated.recentRuns), snapshot.recentRuns);
+    const current = P.view(migrated);
+    assert.equal(current.level, expectedLevel);
+    assert.equal(current.title, expectedTitle);
+    const duplicate = P.award(plain(migrated), reward('saved-v3-win', 2200, 500));
+    assert.equal(duplicate.awarded, false);
+    assert.equal(duplicate.reason, 'duplicate');
+    assert.equal(duplicate.totalXp, totalXp);
+    assert.deepEqual(plain(duplicate.profile), plain(migrated));
+    assert.deepEqual(plain(stored), snapshot, 'migration must not mutate a saved v3 profile');
+  }
 });
 
 test('history is bounded and normalizing corrupt profiles cannot inject fields', () => {

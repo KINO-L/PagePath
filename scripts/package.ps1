@@ -4,9 +4,12 @@ Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifestPath = Join-Path $projectRoot 'manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$supportedLocales = @('en', 'ja', 'zh_CN')
+# Chrome does not fall back from zh_TW to zh_CN. Both Chinese regions use Simplified Chinese.
+$localeFiles = @(($supportedLocales + @('zh_TW')) | ForEach-Object { '_locales/' + $_ + '/messages.json' })
 $requiredFiles = @('manifest.json', 'README.md', 'docs/USAGE.md',
   'vendor/opencv/opencv.js', 'vendor/opencv/LICENSE',
-  'vendor/opencv/LICENSE.emscripten', 'vendor/opencv/README.md')
+  'vendor/opencv/LICENSE.emscripten', 'vendor/opencv/README.md') + $localeFiles
 foreach ($relativePath in $requiredFiles) {
   if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $relativePath) -PathType Leaf)) {
     throw "Missing release file: $relativePath"
@@ -14,6 +17,20 @@ foreach ($relativePath in $requiredFiles) {
 }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'src') -PathType Container)) {
   throw 'Missing extension source directory: src'
+}
+if ($manifest.default_locale -notin $supportedLocales) {
+  throw 'Manifest default_locale must match a packaged locale'
+}
+$messageKeys = [regex]::Matches(($manifest | ConvertTo-Json -Depth 20), '__MSG_([A-Za-z0-9_]+)__') |
+  ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+foreach ($relativePath in $localeFiles) {
+  $messages = Get-Content -LiteralPath (Join-Path $projectRoot $relativePath) -Raw -Encoding UTF8 | ConvertFrom-Json
+  foreach ($messageKey in $messageKeys) {
+    $message = $messages.PSObject.Properties[$messageKey].Value.message
+    if ([string]::IsNullOrWhiteSpace($message)) {
+      throw "Missing locale message '$messageKey' in $relativePath"
+    }
+  }
 }
 
 # The repository contains development tools; the installable archive uses this allowlist.
@@ -38,7 +55,7 @@ foreach ($relativePath in $runtimeFiles) {
 
 $outputDirectory = Join-Path $projectRoot 'dist'
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-$archivePath = Join-Path $outputDirectory ("PagePath-v" + $manifest.version + '.zip')
+$archivePath = Join-Path $outputDirectory ("Miye-v" + $manifest.version + '.zip')
 $temporaryArchive = Join-Path $outputDirectory ('.pagepath-' + [guid]::NewGuid().ToString('N') + '.tmp')
 try {
   $archive = [System.IO.Compression.ZipFile]::Open($temporaryArchive, [System.IO.Compression.ZipArchiveMode]::Create)

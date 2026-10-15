@@ -116,11 +116,13 @@
     assertLayoutViewport();
 
     let resumeAnimations = () => {};
-    overlay.setCaptureHidden(true);
     try {
       resumeAnimations = pauseAnimations();
       for (let attempt = 0; attempt < 2; attempt++) {
         assertActive(signal);
+        // Capture-ready restores controls during analysis. A resized viewport
+        // can require another screenshot, so hide them again for every attempt.
+        overlay.setCaptureHidden(true);
         // Two frames let the compositor paint without the extension overlay.
         await nextPaint(signal);
         await nextPaint(signal);
@@ -130,9 +132,24 @@
         let image = null;
         let retained = false;
         try {
-          const response = await abortable(() => globalThis.chrome.runtime.sendMessage({
-            type: "PAGEPATH_CAPTURE", bounds: { width: bounds.width, height: bounds.height, dpr: bounds.dpr }
-          }), signal, 30000);
+          const runtime = globalThis.chrome.runtime;
+          const captureId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+          const onCaptured = (message, sender) => {
+            if (sender?.id === runtime.id && message?.type === 'PAGEPATH_CAPTURE_READY' && message.captureId === captureId &&
+                !signal?.aborted && overlay.host.isConnected) {
+              // Hide controls only while the actual screenshot is taken. The
+              // spinner and exit button remain available during pixel analysis.
+              resumeAnimations();
+              overlay.setCaptureHidden(false);
+            }
+          };
+          runtime.onMessage?.addListener(onCaptured);
+          let response;
+          try {
+            response = await abortable(() => runtime.sendMessage({
+              type: "PAGEPATH_CAPTURE", captureId, bounds: { width: bounds.width, height: bounds.height, dpr: bounds.dpr }
+            }), signal, 30000);
+          } finally { runtime.onMessage?.removeListener(onCaptured); }
           assertActive(signal);
           if (!response?.ok || !/^data:image\/(?:png|jpeg|webp);base64,/.test(response.dataUrl || "")) {
             throw new Error(response?.error || "无法固定当前页面，请重新点击扩展后重试");
@@ -154,7 +171,8 @@
           resumeAnimations();
           // OpenCV runs in the extension worker: the host site's CSP cannot
           // prohibit its WASM. Decode the exact cached pixel masks it returns.
-          const analysis = await P.MapCodec.decode(response.map);
+          overlay.setCaptureHidden(false);
+          const analysis = await P.MapCodec.decode(response.map, { signal, cooperative: true });
           assertActive(signal);
           if (analysis.width !== bounds.width || analysis.height !== bounds.height) {
             throw new Error("截图地图与当前视口尺寸不一致，请重新生成");
@@ -165,6 +183,7 @@
           return {
             mode: "screenshot",
             analysis,
+            packet: response.map,
             image: snapshotImage,
             viewport: bounds,
             destroy() { releaseImage(snapshotImage); }

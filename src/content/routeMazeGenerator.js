@@ -313,7 +313,7 @@
       ...(toolbarRect ? { toolbarRect } : {}),
       nodes: [{ ...referencePath[0], id: 0, kind: 'start' }, { ...referencePath.at(-1), id: 1, kind: 'finish' }],
       referencePath, referenceLength: challenge.referenceLength, maxInk: Infinity, unlimitedInk: true,
-      difficulty: challenge.difficulty, stars: P.Difficulty.stars(challenge.difficulty), trailLength: 45,
+      difficulty: challenge.difficulty, stars: P.Difficulty.stars(challenge.difficulty), trailLength: P.Config.TRAIL_LENGTH,
       challenge: { ...challenge, intensity: selected.intensity, targetStars: request.targetStars,
         targetDifficulty: request.targetDifficulty, pageComplexity: request.pageComplexity },
       maze: { kind: 'route-first', componentId: proof.componentId, cleanup: cleanup.stats,

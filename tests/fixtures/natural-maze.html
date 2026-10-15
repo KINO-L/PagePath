@@ -49,7 +49,7 @@
 </head>
 <body>
   <main id="content" aria-label="Field Archive 图片与研究记录">
-    <article><p class="eyebrow">FIELD ARCHIVE / 01</p><h1>山间的颜色</h1><p class="caption">自然影像 · 纹理与地貌</p><span class="number">084</span><button id="launch">试玩 PagePath</button></article>
+    <article><p class="eyebrow">FIELD ARCHIVE / 01</p><h1>山间的颜色</h1><p class="caption">自然影像 · 纹理与地貌</p><span class="number">084</span><button id="launch">试玩 迷页</button></article>
     <article><p class="eyebrow">DESIGN NOTES / 02</p><h2>城市切片</h2><p class="caption">建筑研究 · 昼与夜</p><span class="number">126</span></article>
     <article><p class="eyebrow">OBSERVATION / 03</p><h2>潮汐记录</h2><p class="caption">海岸观察 · 持续更新</p><span class="number">057</span></article>
     <article><p class="eyebrow">COLLECTION / 04</p><h2>材料档案</h2><p class="caption">日常器物 · 手作与工艺</p><span class="number">293</span></article>
@@ -59,8 +59,8 @@
   <script>
     // The layout itself is static and remains usable under script-src 'none'.
     // Only the local browser harness uses this launch helper.
-    const modules = ['config','collision','scoring','progression','mazeCleanup','mazeRoute','mazeConnectors','routeMazeGenerator','mazeGenerator','levelGenerator',
-      'opencvRuntime','compactDom','compactMask','imageMapAnalyzer','mapCodec','overlay','pageSnapshot','game'];
+    const modules = ['i18n','config','collision','scoring','progression','mazeCleanup','mazeRoute','mazeConnectors','routeMazeGenerator','mazeGenerator','levelGenerator',
+      'opencvRuntime','compactDom','compactMask','imageMapAnalyzer','mapCodec','mazeTransport','mazeClient','overlay','pageSnapshot','game'];
     let loaded;
     document.getElementById('launch').onclick = async () => {
       if (!globalThis.chrome?.runtime?.id) return;

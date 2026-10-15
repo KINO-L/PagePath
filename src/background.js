@@ -1,14 +1,14 @@
 /* MV3: activeTab grants access only after an explicit toolbar click.
  * Pixel analysis stays in this extension worker so a webpage's CSP cannot block
  * WebAssembly. Only the cached map and screenshot are returned to its top frame. */
-importScripts('content/config.js', 'content/scoring.js', 'content/progression.js', '../vendor/opencv/opencv.js',
-  'content/opencvRuntime.js', 'content/compactMask.js', 'content/imageMapAnalyzer.js', 'content/mapCodec.js');
+importScripts('content/i18n.js', 'content/config.js', 'content/scoring.js', 'content/progression.js', '../vendor/opencv/opencv.js',
+  'content/opencvRuntime.js', 'content/compactMask.js', 'content/imageMapAnalyzer.js', 'content/mapCodec.js', 'generationHost.js');
 const CONTENT_FILES = [
-  "src/content/config.js", "src/content/collision.js", "src/content/scoring.js",
+  "src/content/i18n.js", "src/content/config.js", "src/content/collision.js", "src/content/scoring.js",
   "src/content/progression.js", "src/content/mazeCleanup.js", "src/content/mazeRoute.js",
   "src/content/mazeConnectors.js", "src/content/routeMazeGenerator.js",
   "src/content/mazeGenerator.js", "src/content/levelGenerator.js",
-  "src/content/mapCodec.js", "src/content/compactDom.js",
+  "src/content/mapCodec.js", "src/content/mazeTransport.js", "src/content/mazeClient.js", "src/content/compactDom.js",
   "src/content/overlay.js", "src/content/pageSnapshot.js", "src/content/game.js", "src/content/index.js"
 ];
 const busyTabs = new Set();
@@ -22,7 +22,7 @@ const PENDING_KEY = 'pagepath.pending.v3';
 const pendingSettlements = new Map();
 let profileQueue = Promise.resolve();
 let pendingLoaded = false, pendingRetryTimer = 0, pendingRetryCount = 0;
-const DEFAULT_TITLE = "PagePath · 点击开始 / 关闭";
+const DEFAULT_TITLE = globalThis.__PAGEPATH__.I18n.t("迷页 · 点击开始 / 关闭");
 const CAPTURE_CHANGED = "页面已切换，请回到原页面后重新开始。";
 const CAPTURE_FAILED = "暂时无法固定页面，请稍后重新开始。";
 const ANALYSIS_FAILED = "截图分析未完成，请重新生成地图或更换页面位置。";
@@ -33,6 +33,7 @@ const SAFE_ANALYSIS_ERRORS = new Set([
   "截图中未找到足够清晰的背景空隙，请更换页面位置后重试",
   ANALYSIS_FAILED, MAP_TOO_LARGE,
 ]);
+const generationHost = globalThis.__PAGEPATH__.GenerationHost.create({ supportedPage });
 
 function safeAnalysisError(error) {
   const message = error?.message;
@@ -158,6 +159,10 @@ function capturePage(message, sender, sendResponse) {
       throw new Error(CAPTURE_FAILED);
     }
     const domHints = globalThis.__PAGEPATH__.CompactMask.stable(beforeHints, afterHints, bounds);
+    if (typeof message.captureId === 'string' && /^[a-zA-Z0-9_-]{1,96}$/.test(message.captureId) && chrome.tabs.sendMessage) {
+      await chrome.tabs.sendMessage(request.tabId, { type: 'PAGEPATH_CAPTURE_READY', captureId: message.captureId },
+        request.documentId ? { documentId: request.documentId } : { frameId: 0 }).catch(() => {});
+    }
     const map = await analyzeScreenshot(dataUrl, bounds, domHints);
     const { payload, ...metadata } = map;
     const responseBytes = dataUrl.length + (payload?.length || 0) +
@@ -304,7 +309,7 @@ async function unavailable(tabId) {
   await Promise.allSettled([
     chrome.action.setBadgeText({ tabId, text: "!" }),
     chrome.action.setBadgeBackgroundColor({ tabId, color: "#9b5935" }),
-    chrome.action.setTitle({ tabId, title: "此页面不允许扩展运行。请打开普通网页；本地文件需开启文件网址权限。" })
+    chrome.action.setTitle({ tabId, title: globalThis.__PAGEPATH__.I18n.t("此页面不允许扩展运行。请打开普通网页；本地文件需开启文件网址权限。") })
   ]);
   try {
     await chrome.action.setPopup({ tabId, popup: "src/unavailable.html" });
@@ -332,6 +337,14 @@ chrome.action.onClicked.addListener(async (tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'PAGEPATH_GENERATE') {
+    generationHost.generate(message, sender, sendResponse);
+    return true;
+  }
+  if (message?.type === 'PAGEPATH_CANCEL_GENERATION') {
+    generationHost.cancel(message, sender, sendResponse);
+    return true;
+  }
   if (message?.type === 'PAGEPATH_PROFILE' || message?.type === 'PAGEPATH_COMPLETE') {
     progressMessage(message, sender, sendResponse);
     return true;
@@ -340,13 +353,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     capturePage(message, sender, sendResponse);
     return true;
   }
-  if (message?.type !== "PAGEPATH_CLOSED" || !sender.tab?.id) return;
+  if (message?.type !== "PAGEPATH_CLOSED" || !generationHost.cancelForSender(sender)) return;
   chrome.action.setBadgeText({ tabId: sender.tab.id, text: "" }).catch(() => {});
 });
 
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === "loading" || change.url) {
     navigationVersions.set(tabId, (navigationVersions.get(tabId) || 0) + 1);
+    generationHost.cancelTab(tabId);
   }
   if (change.status !== "loading") return;
   Promise.allSettled([
@@ -354,6 +368,10 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
     chrome.action.setPopup({ tabId, popup: "" }),
     chrome.action.setTitle({ tabId, title: DEFAULT_TITLE })
   ]);
+});
+chrome.tabs.onRemoved.addListener(tabId => {
+  generationHost.cancelTab(tabId);
+  navigationVersions.delete(tabId);
 });
 
 chrome.tabs.onActivated.addListener(({ windowId }) => {

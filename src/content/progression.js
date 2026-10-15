@@ -1,26 +1,18 @@
 (() => {
   'use strict';
   const P = globalThis.__PAGEPATH__ ||= {};
-  const RULES = Object.freeze({ maxLevel: 100, firstLevelXp: 120, levelXpStep: 60,
+  const RULES = Object.freeze({ maxLevel: 5,
     recentRunLimit: 128, maxTotal: 1000000000,
     titles: Object.freeze([
-      Object.freeze({ level: 1, name: '初入迷途' }),
-      Object.freeze({ level: 5, name: '识途新秀' }),
-      Object.freeze({ level: 10, name: '寻径好手' }),
-      Object.freeze({ level: 20, name: '迷宫行者' }),
-      Object.freeze({ level: 35, name: '破阵高手' }),
-      Object.freeze({ level: 50, name: '千径宗师' }),
-      Object.freeze({ level: 75, name: '万象领路人' }),
-      Object.freeze({ level: 100, name: '迷宫之神' }),
+      Object.freeze({ level: 1, name: '萌新', minXp: 0 }),
+      Object.freeze({ level: 2, name: '糕手', minXp: 1500 }),
+      Object.freeze({ level: 3, name: '吴迪', minXp: 15000 }),
+      Object.freeze({ level: 4, name: '？？？', minXp: 60000 }),
+      Object.freeze({ level: 5, name: '宇宙超级无敌螺旋牛逼', minXp: 150000 }),
     ]) });
   const integer = (value, maximum = RULES.maxTotal) => typeof value === 'number' && Number.isFinite(value)
     ? Math.max(0, Math.min(maximum, Math.floor(value))) : 0;
   const validId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,96}$/.test(value);
-  // Total XP needed to reach level n; each next level costs 60 XP more.
-  const threshold = level => {
-    const steps = Math.max(0, level - 1);
-    return steps * RULES.firstLevelXp + steps * (steps - 1) * RULES.levelXpStep / 2;
-  };
 
   function empty() {
     return { version: 3, totalXp: 0, totalScore: 0, totalRuns: 0, bestScore: 0, recentRuns: [] };
@@ -45,13 +37,15 @@
   }
 
   function view(input) {
-    const profile = normalize(input), a = RULES.levelXpStep / 2, b = RULES.firstLevelXp - a;
-    const steps = Math.floor((Math.sqrt(b * b + 4 * a * profile.totalXp) - b) / (2 * a));
-    const level = Math.min(RULES.maxLevel, steps + 1), maxLevel = level === RULES.maxLevel;
-    const xpIntoLevel = maxLevel ? 0 : profile.totalXp - threshold(level);
-    const xpForNextLevel = maxLevel ? 0 : RULES.firstLevelXp + (level - 1) * RULES.levelXpStep;
-    let title = RULES.titles[0].name;
-    for (const stage of RULES.titles) if (level >= stage.level) title = stage.name;
+    const profile = normalize(input);
+    // Stored experience is unchanged. Re-derive the rank from cumulative
+    // thresholds, including profiles earned under the former 100-level curve.
+    let index = 0;
+    while (index + 1 < RULES.titles.length && profile.totalXp >= RULES.titles[index + 1].minXp) index++;
+    const stage = RULES.titles[index], next = RULES.titles[index + 1];
+    const level = stage.level, title = P.I18n?.title(stage.level) || stage.name, maxLevel = !next;
+    const xpIntoLevel = maxLevel ? 0 : profile.totalXp - stage.minXp;
+    const xpForNextLevel = maxLevel ? 0 : next.minXp - stage.minXp;
     return { level, title, totalXp: profile.totalXp, xpIntoLevel, xpForNextLevel,
       currentXp: xpIntoLevel, nextLevelXp: xpForNextLevel, progress: maxLevel ? 1 : xpIntoLevel / xpForNextLevel,
       maxLevel, totalRuns: profile.totalRuns, wins: profile.totalRuns, totalScore: profile.totalScore,

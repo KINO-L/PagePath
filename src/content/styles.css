@@ -1,5 +1,5 @@
 /*
- * PagePath uses a Shadow DOM overlay to keep webpage styles intact and to avoid
+ * 迷页 uses a Shadow DOM overlay to keep webpage styles intact and to avoid
  * site CSS changing the game controls. The authoritative stylesheet is the
  * P.OVERLAY_CSS template in overlay.js, injected into that shadow root.
  *

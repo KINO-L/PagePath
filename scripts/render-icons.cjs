@@ -20,6 +20,6 @@ const candidate = process.env.PAGEPATH_BROWSER || (process.platform === 'win32'
       await page.setContent(`<style>html,body{margin:0;background:transparent}svg{display:block;width:100vw;height:100vh}</style>${svg}`);
       await page.screenshot({ path: path.join(root, `icons/icon${size}.png`), omitBackground: true });
     }
-    console.log('Rendered local brush icons: 16, 32, 48, 128 px.');
+    console.log('Rendered cave and flame icons: 16, 32, 48, 128 px.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

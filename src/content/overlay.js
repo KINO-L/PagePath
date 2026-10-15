@@ -3,6 +3,11 @@
 
   const P = globalThis.__PAGEPATH__ ||= {};
   const SVG_NS = 'http://www.w3.org/2000/svg';
+  const t = (message, params = {}) => P.I18n?.t(message, params) ??
+    message.replace(/\{(\w+)\}/g, (match, key) => Object.hasOwn(params, key) ? String(params[key]) : match);
+  const number = value => P.I18n?.number(value) ?? Number(value).toLocaleString('zh-CN');
+  const html = message => t(message).replace(/[&<>"']/g, character =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 
   // Kept here so a programmatically injected content script can style its shadow
   // root synchronously, without fetches, host permissions, or exposed resources.
@@ -16,20 +21,37 @@
     .visual-layer { pointer-events:none; }
     .obstacle-warning,.obstacle-flash { fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke; }
     .path,.path-outline { display:none; }
-    .ink-stroke { color:#595247; }
-    .ink-stroke-piece { fill:currentColor;stroke:rgba(255,253,247,.45);stroke-width:.35;stroke-linejoin:round; }
-    .ink-bristle { fill:none;stroke:#faf6ea;stroke-width:.35;stroke-linecap:round;opacity:.5; }
-    .surface[data-state="FAILED"] .ink-stroke { color:#a66f58; }
-    .node .stone-body { fill:#76796d;stroke:#fffdf6;stroke-width:1.3; }
-    .node .stone-well { fill:#555b50;stroke:#989c8f;stroke-width:.7; }
-    .node .stone-shine { fill:none;stroke:#c8cbb9;stroke-width:.9;stroke-linecap:round;opacity:.75; }
-    .node .paper-body { fill:#fffaf0;stroke:#656458;stroke-width:1;stroke-linejoin:round; }
-    .node .paper-fold { fill:#e6dfcd;stroke:#8e8875;stroke-width:.65;stroke-linejoin:round; }
-    .node .paper-line { fill:none;stroke:#c5beaa;stroke-width:.8;stroke-linecap:round; }
-    .node .collected-mark { opacity:0;fill:#b1644c; }
-    .node[data-collected="true"] .collected-mark { opacity:1; }
-    .node[data-collected="true"] .stone-well { fill:#8b8979; }
-    .node[data-collected="true"] .paper-line { stroke:#bfa786; }
+    .ember-trail { color:#d8964e; }
+    .ember-trail-glow,.ember-trail-thread { fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round; }
+    .ember-trail-glow { stroke-width:3; }
+    .ember-trail-thread { stroke-width:.8;stroke-dasharray:1.2 2; }
+    .ember-trail-spark { fill:#ffe6a1;stroke:#c88740;stroke-width:.3; }
+    .surface[data-state="FAILED"] .ember-trail { color:#bc816b;opacity:.5; }
+    .surface[data-state="SUCCESS"] .ember-trail { opacity:0;transition:opacity .4s ease-out; }
+    .campfire { opacity:1;transition:opacity .3s ease-out; }
+    .camp-log-underlay,.camp-log,.camp-log-grain { fill:none;stroke-linecap:round; }
+    .camp-log-underlay { stroke:#fff4db;stroke-width:3.8; }
+    .camp-log { stroke:#947058;stroke-width:2.4; }
+    .camp-log-grain { stroke:#c5a27a;stroke-width:.6; }
+    .camp-flame { opacity:1;transition:opacity .18s ease-out; }
+    .flame-shape { transform-box:fill-box;transform-origin:50% 100%;animation:flame-flicker 1.45s ease-in-out infinite; }
+    .flame-body { fill:url(#pagepath-flame);stroke:#bd793e;stroke-width:.4;stroke-linejoin:round; }
+    .flame-inner { fill:#fff0b1; }
+    .flame-core { fill:#fff9df;stroke:#b77937;stroke-width:.35; }
+    .surface[data-state="DRAWING"] .campfire[data-collected="true"] { opacity:.22; }
+    .surface[data-state="DRAWING"] .campfire[data-collected="true"] .camp-flame { opacity:0; }
+    .surface[data-state="DRAWING"] .campfire .flame-shape { animation-play-state:paused; }
+    @keyframes flame-flicker { 0%,100% { transform:scale(.97,1) rotate(-1deg); } 45% { transform:scale(1.03,.95) rotate(1.5deg); } 75% { transform:scale(.95,1.04) rotate(-.5deg); } }
+    .cave-rock { fill:#a69b86;stroke:#fff5df;stroke-width:1.2;stroke-linejoin:round; }
+    .cave-facet { fill:#bdb29c; }
+    .cave-mouth { fill:#373a36;stroke:#77735f;stroke-width:.65;stroke-linejoin:round;transition:fill .45s ease-out; }
+    .cave-crack { fill:none;stroke:#807b68;stroke-width:.6;stroke-linecap:round; }
+    .cave-arrival { opacity:0;transform-box:fill-box;transform-origin:center; }
+    .exit-cave[data-collected="true"] .cave-frame { animation:cave-warm .7s ease-out; }
+    .exit-cave[data-collected="true"] .cave-mouth { fill:#6b4933; }
+    .exit-cave[data-collected="true"] .cave-arrival { opacity:.55;transform:scale(.65);animation:cave-arrive .7s ease-out both; }
+    @keyframes cave-warm { 0%,100% { opacity:1; } 45% { opacity:.75; } }
+    @keyframes cave-arrive { 0% { opacity:0;transform:translateY(4px) scale(1); } 40% { opacity:1;transform:translateY(0) scale(.9); } 100% { opacity:.55;transform:translateY(0) scale(.65); } }
     .collectible { pointer-events:none;opacity:0; }
     .collectible[data-collected="true"] { display:none; }
     .bubble-body { fill:#fff9e8;stroke:#b89758;stroke-width:1; }
@@ -50,14 +72,16 @@
     .pickup-label { fill:#91723d;stroke:#fffbed;stroke-width:2.5;paint-order:stroke;font:600 10px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;text-anchor:middle; }
     .collectible-pickup[data-kind="multiplier"] .pickup-label { fill:#548673; }
     @keyframes bubble-breathe { 0%,100% { opacity:.36;transform:scale(.92); } 50% { opacity:.85;transform:scale(1.12); } }
-    .brush-cursor { position:absolute;left:0;top:0;width:24px;height:36px;z-index:1;overflow:visible;pointer-events:none;display:none;filter:drop-shadow(.5px 1px .6px rgba(29,29,22,.15)); }
-    .brush-cursor[data-visible="true"] { display:block; }
+    .fire-cursor { position:absolute;left:0;top:0;width:24px;height:24px;z-index:1;overflow:visible;pointer-events:none;display:none; }
+    .fire-cursor[data-visible="true"] { display:block; }
     .toolbar { position:absolute;top:12px;left:50%;transform:translateX(-50%);width:min(342px,calc(100% - 20px));height:76px;z-index:2;padding:7px 10px;overflow:hidden;pointer-events:auto;border:1px solid rgba(63,59,46,.17);border-radius:16px;background:rgba(249,246,236,.97);color:#4d4b40;box-shadow:0 3px 14px rgba(43,39,25,.09),inset 0 1px 0 rgba(255,255,250,.9);font:11px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;user-select:none;touch-action:none;cursor:default; }
     .toolbar[data-dragging="true"],.toolbar[data-dragging="true"] * { cursor:move; }
     .toolbar-main { display:flex;align-items:center;gap:5px;height:30px; }
     .toolbar-meta { display:flex;align-items:center;gap:12px;height:28px;margin-top:2px;padding-left:3px; }
     .status { width:18px;height:28px;flex:none;display:grid;place-items:center;color:#777264;outline-offset:0; }
     .status-icon { width:15px;height:15px; }
+    .toolbar[data-state="GENERATING"] .status-icon { color:#a47556;stroke-width:2.2;transform-origin:center;animation:map-loading .85s linear infinite; }
+    @keyframes map-loading { to { transform:rotate(360deg); } }
     .toolbar[data-state="SUCCESS"] .status { color:#59764d; }
     .toolbar[data-state="FAILED"] .status,.toolbar[data-state="PAUSED"] .status { color:#ad654b; }
     .actions { display:flex;align-items:center;gap:3px;margin-left:auto;flex:none; }
@@ -82,9 +106,9 @@
     .exit:hover { color:#ac5f46;background:#f0e2d7; }
     .profile { min-width:0;flex:1; }
     .profile-line { display:flex;align-items:center;gap:6px;white-space:nowrap; }
-    .profile-level { color:#705b40;font:600 10px/14px ui-monospace,Consolas,monospace; }
+    .profile-level { flex:none;color:#705b40;font:600 10px/14px ui-monospace,Consolas,monospace; }
     .profile-level[data-leveled-up="true"]::after { content:" ↑";color:#6b7c4f; }
-    .profile-title { overflow:hidden;text-overflow:ellipsis;color:#8a7c65;font-size:10px; }
+    .profile-title { min-width:0;overflow:hidden;text-overflow:ellipsis;color:#8a7c65;font-size:10px; }
     .xp-track { height:3px;margin-top:3px;overflow:hidden;border-radius:3px;background:#e3dbc8; }
     .xp-fill { height:100%;width:0;background:#a68c5a;border-radius:3px; }
     .collection-summary { display:flex;align-items:center;gap:7px;color:#867760;font:10px/1.2 ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;white-space:nowrap; }
@@ -99,13 +123,21 @@
     .generation-error { position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(400px,calc(100% - 32px));padding:14px 16px;border:1px solid rgba(151,84,57,.25);border-radius:12px;background:rgba(255,250,240,.97);color:#87573f;box-shadow:0 3px 16px rgba(43,39,25,.1);font:12px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;overflow-wrap:anywhere;pointer-events:none; }
     [hidden] { display:none!important; }
     @media(max-width:360px) { .toolbar { padding-inline:7px; } .toolbar-main { gap:3px; } .actions { gap:1px; } button,.new-slot { width:26px; } button.drag-handle { width:12px; } .status { width:16px; } .toolbar-meta { gap:8px; } }
-    @media(prefers-reduced-motion:reduce) { * { animation:none!important; } }
+    @media(prefers-reduced-motion:reduce) { * { animation:none!important;transition:none!important; } }
   `;
 
   const element = (name, attributes = {}) => {
     const node = document.createElementNS(SVG_NS, name);
     for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
     return node;
+  };
+  const flameShape = () => {
+    const group = element('g', { class: 'flame-shape' });
+    group.append(
+      element('path', { class: 'flame-body', d: 'M0 0C-4.7-.3-5.7-3.6-3.7-6.8C-3.9-4.5-2.4-4.2-2-4.7C-.8-6.5-1.4-8.4.4-11C.4-8.1 3-7.1 3.7-4.8C5.1-1.5 2.8 0 0 0Z' }),
+      element('path', { class: 'flame-inner', d: 'M0-.2C-2.4-.4-2.8-2.4-1.1-4.7C-1.2-3.1-.1-3.1.6-5.4C2.6-3 2.2-.5 0-.2Z' }),
+    );
+    return group;
   };
   const pointString = points => points.map(point => `${Number(point.x).toFixed(1)},${Number(point.y).toFixed(1)}`).join(' ');
   const rectangle = rect => ({
@@ -198,6 +230,7 @@
       this.host.id = '__pagepath_overlay__';
       this.host.setAttribute('data-pagepath-root', '');
       this.host.setAttribute('data-pagepath-overlay', 'true');
+      this.host.lang = P.I18n?.locale || 'zh-CN';
       // Inline !important prevents a site's div/reset selectors from moving or
       // concealing the host. Descendants are isolated from site CSS by shadow DOM.
       this.host.style.cssText = 'all:initial !important;position:fixed !important;inset:0 !important;width:100vw !important;height:100vh !important;display:block !important;margin:0 !important;padding:0 !important;border:0 !important;z-index:2147483647 !important;pointer-events:none !important;overflow:hidden !important;isolation:isolate !important;contain:layout style size !important;';
@@ -207,7 +240,7 @@
       style.textContent = P.OVERLAY_CSS;
       this.shadowRoot.append(style);
 
-      this.surface = element('svg', { class: 'surface', xmlns: SVG_NS, 'aria-label': 'PagePath 迷宫地图', role: 'img' });
+      this.surface = element('svg', { class: 'surface', xmlns: SVG_NS, 'aria-label': t('迷页 迷宫地图'), role: 'img' });
       this.svg = this.surface;
       this.debugLayer = element('g', { class: 'visual-layer', 'aria-hidden': 'true' });
       this.mazeWallLayer = element('g', { class: 'visual-layer maze-walls', 'aria-hidden': 'true' });
@@ -225,6 +258,15 @@
           element('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': 0 }));
         warningDefs.append(glow);
       }
+      const fireGlow = element('radialGradient', { id: 'pagepath-fire-glow' });
+      fireGlow.append(element('stop', { offset: '0%', 'stop-color': '#ffd383', 'stop-opacity': .55 }),
+        element('stop', { offset: '45%', 'stop-color': '#eeb166', 'stop-opacity': .18 }),
+        element('stop', { offset: '100%', 'stop-color': '#eeb166', 'stop-opacity': 0 }));
+      const flame = element('linearGradient', { id: 'pagepath-flame', x1: '0%', y1: '100%', x2: '0%', y2: '0%' });
+      flame.append(element('stop', { offset: '0%', 'stop-color': '#e8a153' }),
+        element('stop', { offset: '55%', 'stop-color': '#f4bf67' }),
+        element('stop', { offset: '100%', 'stop-color': '#ffe2a0' }));
+      warningDefs.append(fireGlow, flame);
       this.obstacleFlash = element('use', { class: 'obstacle-flash visual-layer', href: '#pagepath-obstacles',
         stroke: '#e33128', 'stroke-width': 2, opacity: 0, 'aria-hidden': 'true' });
       this.flashAnimation = null;
@@ -233,7 +275,7 @@
       this.pathLayer = element('g', { class: 'visual-layer', 'aria-hidden': 'true' });
       this.pathOutline = element('polyline', { class: 'path-outline' });
       this.path = element('polyline', { class: 'path' });
-      this.inkStroke = element('g', { class: 'ink-stroke' });
+      this.inkStroke = element('g', { class: 'ember-trail' });
       this.pathLayer.append(this.pathOutline, this.path, this.inkStroke);
       this.collectibleLayer = element('g', { class: 'visual-layer collectibles', 'aria-hidden': 'true' });
       this.pickupLayer = element('g', { class: 'visual-layer pickups', 'aria-hidden': 'true' });
@@ -246,51 +288,46 @@
         this.obstacleWarning, this.collectibleLayer, this.pathLayer, this.nodeLayer, this.pickupLayer);
       this.shadowRoot.append(this.surface);
       this.brushCursor = element('svg', {
-        class: 'brush-cursor', viewBox: '0 0 24 36', width: 24, height: 36,
+        class: 'fire-cursor', viewBox: '-12 -12 24 24', width: 24, height: 24,
         'aria-hidden': 'true', 'data-visible': 'false',
       });
-      // Rotate the complete brush around its tip so the nib and handle keep
-      // one straight axis while the pointer hotspot stays fixed.
-      const brushBody = element('g', { class: 'brush-body', transform: 'rotate(28 7 32)' });
-      brushBody.append(
-        element('path', { d: 'M4.8 21V3Q4.8 1.2 7 1.2Q9.2 1.2 9.2 3V21Z', fill: '#ba9861', stroke: '#75674f', 'stroke-width': .55 }),
-        element('path', { d: 'M6 3V20', fill: 'none', stroke: '#e9cfa2', 'stroke-width': .7 }),
-        element('path', { d: 'M4.5 20.5H9.5V23H4.5Z', fill: '#766550' }),
-        element('path', { d: 'M4.5 20H9.5', stroke: '#a7543e', 'stroke-width': .9 }),
-        element('path', { class: 'brush-tip', d: 'M4.5 23Q4.5 26.5 7 32Q9.5 26.5 9.5 23Z', fill: '#33332d', stroke: '#f7f0dd', 'stroke-width': .45 }),
-        element('path', { d: 'M6.3 24L7 30', fill: 'none', stroke: '#9c9787', 'stroke-width': .45 }),
+      // The fixed ember at the flame's base is the pointer hotspot. Only the
+      // decorative flame above it flickers; collision coordinates never move.
+      this.brushCursor.append(
+        element('circle', { class: 'fire-halo', cx: 0, cy: -3, r: 9, fill: 'url(#pagepath-fire-glow)' }),
+        flameShape(),
+        element('circle', { class: 'flame-core', cx: 0, cy: 0, r: P.Config.PLAYER_RADIUS }),
       );
-      this.brushCursor.append(brushBody);
       this.shadowRoot.append(this.brushCursor);
 
       this.toolbar = document.createElement('section');
       this.toolbar.className = 'toolbar';
-      this.toolbar.setAttribute('aria-label', 'PagePath 游戏控制');
+      this.toolbar.setAttribute('aria-label', t('迷页 游戏控制'));
       // All markup is extension-owned constant text; page content is never HTML.
       this.toolbar.innerHTML = `
         <div class="toolbar-main">
-          <button class="drag-handle" type="button" aria-label="移动悬浮栏" title="拖动悬浮栏 · 方向键微调">${iconMarkup('<path d="M8 5h.1M16 5h.1M8 12h.1M16 12h.1M8 19h.1M16 19h.1" stroke-width="3"/>')}</button>
-          <span class="status" tabindex="0" role="img" aria-label="正在准备">
+          <button class="drag-handle" type="button" aria-label="${html('移动悬浮栏')}" title="${html('拖动悬浮栏 · 方向键微调')}">${iconMarkup('<path d="M8 5h.1M16 5h.1M8 12h.1M16 12h.1M8 19h.1M16 19h.1" stroke-width="3"/>')}</button>
+          <span class="status" tabindex="0" role="img" aria-label="${html('正在准备')}">
             <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path/></svg>
-            <span class="state-label">准备中</span>
+            <span class="state-label">${html('准备中')}</span>
           </span>
           <div class="main-info">
-            <span class="star-rating difficulty-stars" role="img" aria-label="正在生成星级" title="本局难度"></span>
-            <span class="round-xp" aria-label="本局经验" hidden><span class="xp-value">+0</span><span class="round-xp-unit">经验</span></span>
+            <span class="star-rating difficulty-stars" role="img" aria-label="${html('正在生成星级')}" title="${html('本局难度')}"></span>
+            <span class="round-xp" aria-label="${html('本局经验')}" hidden><span class="xp-value">+0</span><span class="round-xp-unit">${html('经验')}</span></span>
           </div>
           <div class="actions">
-            <button class="retry" type="button" aria-label="重试" title="重试当前迷宫">${iconMarkup(icons.retry)}</button>
+            <button class="retry" type="button" aria-label="${html('重试')}" title="${html('重试当前迷宫')}">${iconMarkup(icons.retry)}</button>
             <span class="new-slot">
-              <button class="new-puzzle" type="button" aria-label="新地图" title="生成新迷宫">${iconMarkup(icons.newPuzzle)}</button>
-              <button class="regenerate" type="button" aria-label="重新生成" title="重新截取页面并生成迷宫" hidden>${iconMarkup(icons.regenerate)}</button>
+              <button class="new-puzzle" type="button" aria-label="${html('新地图')}" title="${html('生成新迷宫')}">${iconMarkup(icons.newPuzzle)}</button>
+              <button class="regenerate" type="button" aria-label="${html('重新生成')}" title="${html('重新截取页面并生成迷宫')}" hidden>${iconMarkup(icons.regenerate)}</button>
             </span>
-            <button class="exit" type="button" aria-label="退出游戏" title="退出游戏 · 右键 / Esc">${iconMarkup(icons.exit)}</button>
+            <button class="exit" type="button" aria-label="${html('退出游戏')}" title="${html('退出游戏 · 右键 / Esc')}">${iconMarkup(icons.exit)}</button>
           </div>
         </div>
         <div class="toolbar-meta">
-          <div class="profile" title="等级经验">
-            <div class="profile-line"><span class="profile-level">Lv.1</span><span class="profile-title">初入迷途</span></div>
-            <div class="xp-track" role="progressbar" aria-label="等级经验" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="xp-fill"></div></div>
+          <div class="profile" title="${html('等级经验')}">
+            <div class="profile-line"><span class="profile-level">Lv.1</span><span class="profile-title">${html('萌新')}</span></div>
+            <div class="xp-track" role="progressbar" aria-label="${html('等级经验')}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="xp-fill"></div></div>
           </div>
           <div class="collection-summary" hidden><span class="collection-xp">+0 XP</span><span class="collection-multiplier">×1</span></div>
         </div>
@@ -337,8 +374,8 @@
         this.debugButton.className = 'debug-button';
         this.debugButton.type = 'button';
         this.debugButton.innerHTML = iconMarkup(icons.debug);
-        this.debugButton.setAttribute('aria-label', '地图分析视图');
-        this.debugButton.title = '切换地图分析视图';
+        this.debugButton.setAttribute('aria-label', t('地图分析视图'));
+        this.debugButton.title = t('切换地图分析视图');
         this.toolbar.querySelector('.actions').insertBefore(this.debugButton, this.exitButton);
         this.bind(this.debugButton, 'click', onDebug);
         this.toolbar.dataset.debug = 'true';
@@ -590,8 +627,7 @@
         return;
       }
       this.lastBrushPoint = { x, y };
-      // The whole brush tilts around its fixed nib tip at local (7,32).
-      this.brushCursor.style.transform = 'translate(' + (x - 7) + 'px, ' + (y - 32) + 'px)';
+      this.brushCursor.style.transform = 'translate(' + (x - 12) + 'px, ' + (y - 12) + 'px)';
       this.brushCursor.setAttribute('data-visible', 'true');
       if (!this.warningFrame) this.warningFrame = requestAnimationFrame(() => {
         this.warningFrame = 0;
@@ -667,9 +703,11 @@
       this.collectedIds = next;
       this.collection = { xp: Math.max(0, Math.round(Number(collection.xp) || 0)),
         multiplier: Math.max(1, Number(collection.multiplier) || 1) };
-      for (const node of this.toolbar.querySelectorAll('.collection-xp')) node.textContent = '+' + this.collection.xp.toLocaleString('zh-CN') + ' XP';
-      for (const node of this.toolbar.querySelectorAll('.collection-multiplier')) node.textContent = '×' + this.collection.multiplier;
-      this.toolbar.querySelector('.run-hud').setAttribute('aria-label', '已收集 ' + this.collection.xp + ' 经验 · ' + this.collection.multiplier + ' 倍');
+      for (const node of this.toolbar.querySelectorAll('.collection-xp')) node.textContent = t('+{xp} XP', { xp: number(this.collection.xp) });
+      for (const node of this.toolbar.querySelectorAll('.collection-multiplier')) node.textContent = '×' + number(this.collection.multiplier);
+      this.toolbar.querySelector('.run-hud').setAttribute('aria-label', t('已收集 {xp} 经验 · {multiplier} 倍', {
+        xp: number(this.collection.xp), multiplier: number(this.collection.multiplier),
+      }));
       this.updateCollectionSummary();
       this.renderCollectibleProximity(this.lastPointerPoint);
     }
@@ -760,12 +798,9 @@
       this.level = level;
       this.mazeWallLayer.replaceChildren();
       this.mazeFloorLayer.replaceChildren();
-      if (level?.mazeOpenings?.length) {
-        // Only erase pixels actually opened through original foreground.
-        // Natural page background is never covered with a maze-shaped floor.
-        const d = level.mazeOpenings.map(r => `M${r.x},${r.y}h${r.width}v${r.height}h-${r.width}Z`).join('');
-        this.mazeFloorLayer.append(element('path', { d, fill: '#fffaf0', 'fill-opacity': 0.98 }));
-      }
+      // Openings and added walls only change the collision map. Keep both
+      // material layers empty so even carved routes preserve the page pixels;
+      // nearby boundaries are revealed by renderProximity instead.
       if (!level) this.setMap(null);
       this.update({ difficulty: level?.difficulty ?? 0, stars: level?.stars, result: null });
       this.renderCollectibles(level?.collectibles || []);
@@ -777,25 +812,31 @@
       level.nodes.forEach((node, index) => {
         const kind = index === 0 ? 'start' : 'finish';
         const group = element('g', {
-          class: `node ${kind === 'start' ? 'inkstone' : 'paper'}`,
+          class: `node ${kind === 'start' ? 'campfire' : 'exit-cave'}`,
           transform: `translate(${node.x} ${node.y})`,
           'data-node-id': node.id ?? index, 'data-collected': Boolean(node.collected),
         });
         if (kind === 'start') {
           group.append(
-            element('path', { class: 'stone-body', d: 'M-8-8Q-1-10 6-8Q10-6 10 1Q10 8 6 9L-6 10Q-11 8-11 2L-10-4Q-10-7-8-8Z' }),
-            element('path', { class: 'stone-well', d: 'M-5-5Q0-7 5-5Q7-3 6 3Q5 6 0 6Q-6 6-7 2Q-8-2-5-5Z' }),
-            element('path', { class: 'stone-shine', d: 'M-6-4Q-2-6 3-5M-7 7L-2 8' }),
-            element('circle', { class: 'collected-mark', cx: 5.8, cy: 5.8, r: 2 }),
+            element('path', { class: 'camp-log-underlay', d: 'M-7.5 5L7.5 9M-7.5 9L7.5 5' }),
+            element('path', { class: 'camp-log', d: 'M-7.5 5L7.5 9M-7.5 9L7.5 5' }),
+            element('path', { class: 'camp-log-grain', d: 'M-5.5 5.2L-1 6.4M2.5 6.3L6.5 5.2' }),
           );
+          const fire = element('g', { class: 'camp-flame', transform: 'translate(0 3)' });
+          const body = element('g', { transform: 'scale(1.15)' });
+          body.append(flameShape());
+          fire.append(element('circle', { cy: -3, r: 11, fill: 'url(#pagepath-fire-glow)' }), body);
+          group.append(fire);
         } else if (kind === 'finish' || kind === 'end') {
-          group.append(
-            element('path', { d: 'M-7-9H3L7-5V9H-7Z', fill: '#fffdf5', stroke: '#fffdf5', 'stroke-width': 2.1, 'stroke-linejoin': 'round' }),
-            element('path', { class: 'paper-body', d: 'M-7-9H3L7-5V9L-7 8Z' }),
-            element('path', { class: 'paper-fold', d: 'M3-9L7-5H3Z' }),
-            element('path', { class: 'paper-line', d: 'M-4-3H0M-4 1H3M-4 5H0' }),
-            element('rect', { class: 'collected-mark', x: 1.5, y: 4, width: 3.5, height: 3.5, rx: .5, transform: 'rotate(-8 3.3 5.8)' }),
-          );
+          const frame = element('g', { class: 'cave-frame' });
+          frame.append(element('path', { class: 'cave-rock', d: 'M-10 8L-9-1L-5.5-8L.5-10L6-7L9-1L10 8Z' }),
+            element('path', { class: 'cave-facet', d: 'M-9-1L-5.5-8L.5-10L-1-5L-5-2L-6 7L-10 8Z' }),
+            element('path', { class: 'cave-mouth', d: 'M-5.8 7L-5.3 0Q-4.4-5 .4-5.3Q5-5 5.5 0L6 7Z' }),
+            element('path', { class: 'cave-crack', d: 'M.5-10L2-7M6-6L7-2L9 0M-9 3L-7 4' }));
+          const arrival = element('g', { class: 'cave-arrival' });
+          arrival.append(element('ellipse', { cy: 1, rx: 5, ry: 6, fill: 'url(#pagepath-fire-glow)' }),
+            element('path', { d: 'M0 4C-3 4-3.5 1-1.5-1C-1 0 0-1 .2-3C3.5 0 3 3.8 0 4Z', fill: '#ffd58b' }));
+          group.append(frame, arrival);
         }
         this.nodeLayer.append(group);
         this.nodeElements.set(node.id ?? index, group);
@@ -812,7 +853,7 @@
     }
 
     renderPath(points = []) {
-      const tailLength = this.level?.trailLength ?? P.Config.TRAIL_LENGTH ?? 45;
+      const tailLength = this.level?.trailLength ?? P.Config.TRAIL_LENGTH ?? 30;
       const tail = P.Trail.clip(points, tailLength);
       const coordinates = pointString(tail);
       this.path.setAttribute('points', coordinates);
@@ -820,12 +861,12 @@
       if (!this.inkStroke) return;
       this.inkStroke.replaceChildren();
       if (tail.length < 2) return;
-      // Sample by arc length, so the brush texture is the same for a slow
-      // gesture and a single fast movement. Only this short tail is rendered.
+      // Sample the same short ember trail by distance for both slow and fast
+      // movement. The fixed ember at the flame's base is the collision cue.
       const lengths = tail.slice(1).map((point, i) => Math.hypot(point.x - tail[i].x, point.y - tail[i].y));
       const length = lengths.reduce((sum, value) => sum + value, 0);
       if (!length) return;
-      const count = Math.max(2, Math.ceil(length / 1.4));
+      const count = Math.max(2, Math.ceil(length / 2));
       const samples = [];
       let segment = 0, before = 0;
       for (let i = 0; i <= count; i++) {
@@ -835,27 +876,17 @@
         samples.push({ x: tail[segment].x + (tail[segment + 1].x - tail[segment].x) * ratio,
           y: tail[segment].y + (tail[segment + 1].y - tail[segment].y) * ratio });
       }
-      const edges = samples.map((point, i) => {
-        const previous = samples[Math.max(0, i - 1)], next = samples[Math.min(count, i + 1)];
-        const dx = next.x - previous.x, dy = next.y - previous.y, magnitude = Math.hypot(dx, dy) || 1;
-        const t = i / count;
-        const width = (.12 + 1.05 * Math.sin(t * Math.PI / 2)) * (.94 + .06 * Math.sin(i * 2.3));
-        return { left: { x: point.x - dy / magnitude * width, y: point.y + dx / magnitude * width },
-          right: { x: point.x + dy / magnitude * width, y: point.y - dx / magnitude * width } };
-      });
-      const xy = point => `${point.x.toFixed(2)},${point.y.toFixed(2)}`;
       for (let i = 1; i <= count; i++) {
-        this.inkStroke.append(element('path', { class: 'ink-stroke-piece',
-          d: `M${xy(edges[i - 1].left)}L${xy(edges[i].left)}L${xy(edges[i].right)}L${xy(edges[i - 1].right)}Z`,
-          opacity: (.12 + .62 * i / count).toFixed(2) }));
+        const points = pointString([samples[i - 1], samples[i]]), strength = (i / count) ** 1.5;
+        this.inkStroke.append(
+          element('polyline', { class: 'ember-trail-glow', points, opacity: (.13 * strength).toFixed(3) }),
+          element('polyline', { class: 'ember-trail-thread', points, opacity: (.48 * strength).toFixed(3) }));
       }
-      // A fine broken fibre gives the stroke a dry-brush edge instead of a
-      // uniform black wire. It is visual only and does not affect collision.
-      const fibre = samples.slice(Math.floor(count * .25), Math.floor(count * .85))
-        .map((point, i) => ({ x: point.x + (edges[i + Math.floor(count * .25)].left.x - point.x) * .35,
-          y: point.y + (edges[i + Math.floor(count * .25)].left.y - point.y) * .35 }));
-      if (fibre.length > 1) this.inkStroke.append(element('polyline', {
-        class: 'ink-bristle', points: pointString(fibre), 'stroke-dasharray': '2.5 1.4 4 .8' }));
+      if (length > 8) for (const fraction of [.28, .55, .78]) {
+        const sample = samples[Math.round(count * fraction)];
+        this.inkStroke.append(element('circle', { class: 'ember-trail-spark', cx: sample.x, cy: sample.y,
+          r: .35 + fraction * .3, opacity: .25 + fraction * .4 }));
+      }
     }
 
     update({ state, message, difficulty, stars, profile, result, generationFailed } = {}) {
@@ -870,14 +901,19 @@
         const level = Math.max(1, Math.floor(profile.level || 1));
         const current = Math.max(0, Math.round(profile.currentXp ?? profile.xpIntoLevel ?? 0));
         const required = Math.max(1, Math.round(profile.nextLevelXp ?? profile.xpForNextLevel ?? 1));
-        const percent = Math.max(0, Math.min(100, Number.isFinite(profile.progress) ? profile.progress * 100 : current / required * 100));
-        const title = profile.title || '初入迷途';
+        const maxLevel = Boolean(profile.maxLevel);
+        const percent = maxLevel ? 100 : Math.max(0, Math.min(100, Number.isFinite(profile.progress) ? profile.progress * 100 : current / required * 100));
+        const title = P.I18n?.title(level) || profile.title || t('萌新');
+        const progressLabel = maxLevel ? t('已满级') : t('{current} / {required} XP', {
+          current: number(current), required: number(required),
+        });
         this.toolbar.querySelector('.profile-level').textContent = 'Lv.' + level;
         this.toolbar.querySelector('.profile-title').textContent = title;
-        this.toolbar.querySelector('.profile').title = 'Lv.' + level + ' · ' + title + ' · ' + current + ' / ' + required + ' XP';
+        this.toolbar.querySelector('.profile-title').title = title;
+        this.toolbar.querySelector('.profile').title = 'Lv.' + level + ' · ' + title + ' · ' + progressLabel;
         this.toolbar.querySelector('.xp-fill').style.width = percent + '%';
         this.toolbar.querySelector('.xp-track').setAttribute('aria-valuenow', String(Math.round(percent)));
-        this.toolbar.querySelector('.xp-track').setAttribute('aria-valuetext', current + ' / ' + required + ' XP');
+        this.toolbar.querySelector('.xp-track').setAttribute('aria-valuetext', progressLabel);
       }
       if (result !== undefined) this.result = result;
       if (state) {
@@ -887,30 +923,31 @@
         this.toolbarMain.inert = state === 'DRAWING';
         this.toolbarMeta.inert = state === 'DRAWING';
         this.surface.dataset.state = state;
-        this.stateLabel.textContent = {
+        this.stateLabel.textContent = t({
           IDLE: '待开始', GENERATING: '生成中', READY: '待开始', DRAWING: '探索中',
           FAILED: this.generationFailed ? '正在恢复地图' : '再试一次', SUCCESS: '已完成', PAUSED: '已暂停', DESTROYED: '已退出',
-        }[state] || state;
+        }[state] || state);
         this.statusPath.setAttribute('d', {
           IDLE: 'M8 5Q4 6 4 12Q4 19 12 19Q20 19 20 12Q20 4 12 4Q10 4 8 5ZM8 9Q12 6 16 9',
           READY: 'M8 5Q4 6 4 12Q4 19 12 19Q20 19 20 12Q20 4 12 4Q10 4 8 5ZM8 9Q12 6 16 9',
-          GENERATING: 'M12 3V6M12 18V21M3 12H6M18 12H21M5.6 5.6L7.8 7.8M16.2 16.2L18.4 18.4M5.6 18.4L7.8 16.2M16.2 7.8L18.4 5.6',
-          DRAWING: 'M5 19L8 12L16 4L20 8L12 16ZM8 12L12 16',
+          GENERATING: 'M12 4A8 8 0 1 1 4 12',
+          DRAWING: 'M12 3C13 8 18 9 18 14A6 6 0 0 1 6 14Q6 11 9 9Q8 12 10 12Q13 10 12 3ZM12 13Q8 18 12 19Q16 18 12 13Z',
           SUCCESS: 'M5 12L10 17L20 6', FAILED: 'M7 7L17 17M17 7L7 17',
           PAUSED: 'M9 6V18M15 6V18', DESTROYED: 'M7 7L17 17M17 7L7 17',
         }[state] || '');
         if (this.generationFailed || state !== 'DRAWING') this.hideBrush();
       }
       const busy = this.state === 'GENERATING';
+      this.toolbar.setAttribute('aria-busy', String(busy));
       const drawing = this.state === 'DRAWING';
       const paused = this.state === 'PAUSED';
       const destroyed = this.state === 'DESTROYED';
       this.dragHandle.disabled = busy || drawing || destroyed;
       if (this.dragHandle.disabled) this.endToolbarDrag();
       this.retryButton.disabled = busy || drawing || paused || destroyed || (!this.level && !this.generationFailed);
-      const retryLabel = this.generationFailed ? '刷新地图' : '重试';
+      const retryLabel = t(this.generationFailed ? '刷新地图' : '重试');
       this.retryButton.setAttribute('aria-label', retryLabel);
-      this.retryButton.title = this.generationFailed ? '重新截取页面并生成迷宫' : '重试当前迷宫';
+      this.retryButton.title = t(this.generationFailed ? '重新截取页面并生成迷宫' : '重试当前迷宫');
       if (this.retryButton.dataset.refresh !== String(this.generationFailed)) {
         this.retryButton.innerHTML = iconMarkup(this.generationFailed ? icons.regenerate : icons.retry);
         this.retryButton.dataset.refresh = String(this.generationFailed);
@@ -926,30 +963,34 @@
       this.starRating.hidden = completed;
       this.starRating.dataset.stars = String(generating ? 0 : this.stars);
       this.roundXp.hidden = !completed;
-      this.starRating.setAttribute('aria-label', generating ? '正在生成星级' : '本局难度 ' + this.stars + ' 星');
-      this.starRating.title = generating ? '正在生成星级' : this.stars + ' 星';
+      this.starRating.setAttribute('aria-label', generating ? t('正在生成星级') : t('本局难度 {stars} 星', { stars: number(this.stars) }));
+      this.starRating.title = generating ? t('正在生成星级') : t('{stars} 星', { stars: number(this.stars) });
       for (let index = 0; index < this.starIcons.length; index++) this.starIcons[index].dataset.filled = String(!generating && index < this.stars);
       this.toolbar.querySelector('.profile-level').dataset.leveledUp = String(completed && Boolean(this.result?.leveledUp));
       if (completed) {
         const result = this.result, xp = Math.max(0, Math.round(Number(result.xp) || 0));
-        const amount = '+' + xp.toLocaleString('zh-CN');
+        const amount = '+' + number(xp);
         this.roundXp.querySelector('.xp-value').textContent = amount;
-        this.roundXp.setAttribute('aria-label', '本局获得 ' + amount + ' 经验');
-        const details = [this.stars + ' 星'];
-        if (!xp) details.unshift('本图已结算');
-        if (result.leveledUp) details.push('升级 Lv.' + result.previousLevel + ' → Lv.' + result.level +
-          (this.profile?.title ? ' · ' + this.profile.title : ''));
+        this.roundXp.setAttribute('aria-label', t('本局获得 {amount} 经验', { amount }));
+        const details = [t('{stars} 星', { stars: number(this.stars) })];
+        if (!xp) details.unshift(t('本图已结算'));
+        if (result.leveledUp) {
+          const title = P.I18n?.title(result.level) || this.profile?.title;
+          details.push(t('升级 Lv.{previous} → Lv.{level}', { previous: result.previousLevel, level: result.level }) +
+            (title ? ' · ' + title : ''));
+        }
         this.roundXp.title = details.join(' · ');
       }
       if (message !== undefined || state) {
         const defaults = {
           GENERATING: '正在生成迷宫…',
-          READY: '单击砚台开始，移动毛笔穿过迷宫，到达纸张。',
-          DRAWING: '移动毛笔，避开墙壁，找到通往纸张的路。',
-          FAILED: this.generationFailed ? '地图暂未准备好，请重新截取页面。' : '碰到障碍了，再次单击砚台开始。',
+          READY: '单击小火堆开始，引导火苗穿过迷宫，到达洞口。',
+          DRAWING: '移动小火苗，避开墙壁，找到洞口。',
+          FAILED: this.generationFailed ? '地图暂未准备好，请重新截取页面。' : '碰到障碍了，再次单击小火堆开始。',
           SUCCESS: '已走出迷宫。', PAUSED: '页面尺寸变化，请重新生成迷宫。',
         };
-        this.message.textContent = message ?? defaults[this.state] ?? '';
+        const text = message ?? defaults[this.state] ?? '';
+        this.message.textContent = P.I18n?.error(text) ?? t(text);
         this.message.title = this.message.textContent;
       }
       this.updateCollectionSummary();

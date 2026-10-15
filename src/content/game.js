@@ -33,6 +33,7 @@
       this.unwatch = null;
       this.snapshot = null;
       this.captureAbort = null;
+      this.generationAbort = null;
       this.generation = 0;
       this.generationFailed = false;
       this.previousFocus = document.activeElement;
@@ -133,6 +134,8 @@
       if (this.state === STATES.DESTROYED) return;
       const generation = ++this.generation;
       this.captureAbort?.abort(); this.captureAbort = null;
+      this.generationAbort?.abort();
+      const controller = new AbortController(); this.generationAbort = controller;
       this.stopAttempt(); this.state = STATES.GENERATING; this.generationFailed = false;
       this.unwatch?.(); this.unwatch = null;
       if (refresh) {
@@ -151,8 +154,8 @@
           if (this.state === STATES.DESTROYED || generation !== this.generation) return;
           try {
             if (!this.snapshot) {
-              if (!P.PageSnapshot?.available()) throw new Error('请点击浏览器中的 PagePath 扩展图标开始');
-              const controller = new AbortController(); this.captureAbort = controller;
+              if (!P.PageSnapshot?.available()) throw new Error('请点击浏览器中的 迷页 扩展图标开始');
+              this.captureAbort = controller;
               const snapshot = await P.PageSnapshot.capture({ overlay: this.overlay, signal: controller.signal });
               if (this.state === STATES.DESTROYED || generation !== this.generation) { snapshot.destroy?.(); return; }
               this.captureAbort = null; this.snapshot = snapshot; this.overlay.setSnapshot(snapshot.image);
@@ -161,7 +164,13 @@
             if (this.sourceAnalysis !== source) this.recentLayouts = [];
             this.sourceAnalysis = source;
             this.unwatch = P.PageSnapshot.watch(this.snapshot, { onChange: reason => this.pause(reason || '窗口尺寸已变化，请刷新地图') });
-            this.level = P.LevelGenerator.generate(source, this.overlay.getReservedRects(), Math.random, this.recentLayouts);
+            const level = await P.MazeClient.generate(this.snapshot, this.overlay.getReservedRects(), this.recentLayouts,
+              { signal: controller.signal });
+            // A closed, resized, or superseded game can never accept a late map.
+            if (controller.signal.aborted || this.state !== STATES.GENERATING || generation !== this.generation) return;
+            this.unwatch?.check?.();
+            if (controller.signal.aborted || this.state !== STATES.GENERATING) return;
+            this.generationAbort = null; this.level = level;
             this.analysis = this.level.analysis; this.collisionIndex = this.level.obstacleIndex;
             this.run = { id: runId(), settled: false, collectedIds: [], collectedXp: 0, collectedCount: 0, multiplier: 1 };
             if (this.level.toolbarRect) this.overlay.positionToolbar(this.level.toolbarRect.x, this.level.toolbarRect.y);
@@ -171,7 +180,8 @@
             this.recentLayouts.push(this.level.nodes.map(({ x, y }) => ({ x, y })));
             if (this.recentLayouts.length > 4) this.recentLayouts.shift();
           } catch (error) {
-            if (this.state === STATES.DESTROYED || generation !== this.generation) return;
+            if (controller.signal.aborted || this.state === STATES.DESTROYED || generation !== this.generation) return;
+            this.generationAbort = null;
             this.captureAbort = null; this.unwatch?.(); this.unwatch = null;
             this.level = this.analysis = this.collisionIndex = null;
             this.overlay.renderLevel(null); this.overlay.setMap?.(null);
@@ -191,7 +201,7 @@
       Object.assign(this.run, { collectedIds: [], collectedXp: 0, collectedCount: 0, multiplier: 1 });
       this.syncCollectibles();
       this.overlay.resetNodes(); this.overlay.renderPath([]);
-      this.update(this.run.settled ? '本图已结算 · 可练习，或换一张新地图' : '单击砚台，穿过迷宫到达纸张');
+      this.update(this.run.settled ? '本图已结算 · 可练习，或换一张新地图' : '单击小火堆，带着火苗寻找出口洞口');
     }
 
     pointerDown(event) {
@@ -230,9 +240,9 @@
         else end = entry;
       }
       if (end.x < C.PLAYER_RADIUS || end.y < C.PLAYER_RADIUS || end.x > this.analysis.width - C.PLAYER_RADIUS || end.y > this.analysis.height - C.PLAYER_RADIUS) {
-        this.fail('离开了当前视口，点击砚台重试'); return;
+        this.fail('离开了当前视口，点击小火堆重试'); return;
       }
-      if (P.Collision.segmentHits(previous, end, this.collisionIndex)) { this.fail('碰到了迷宫边界，点击砚台重试'); return; }
+      if (P.Collision.segmentHits(previous, end, this.collisionIndex)) { this.fail('碰到了迷宫边界，点击小火堆重试'); return; }
       const travel = segmentLength * (finishT ?? 1);
       this.collectBetween(previous, end);
       this.points.push(end); this.length += travel;
@@ -265,7 +275,7 @@
       if (this.state !== STATES.DRAWING || event.pointerId !== this.pointerId) return;
       this.unwatch?.check?.(); if (this.state !== STATES.DRAWING) return;
       this.moveTo({ x: event.clientX, y: event.clientY });
-      if (this.state === STATES.DRAWING && this.pointerType !== 'mouse') this.fail('输入已抬起，点击砚台重试');
+      if (this.state === STATES.DRAWING && this.pointerType !== 'mouse') this.fail('输入已抬起，点击小火堆重试');
     }
 
     queueRender() {
@@ -347,7 +357,13 @@
     }
 
     pause(message) {
-      if ([STATES.DESTROYED, STATES.GENERATING, STATES.PAUSED].includes(this.state)) return;
+      if ([STATES.DESTROYED, STATES.PAUSED].includes(this.state)) return;
+      if (this.state === STATES.GENERATING) {
+        this.generationAbort?.abort(); this.generationAbort = null;
+        this.captureAbort?.abort(); this.captureAbort = null;
+        ++this.generation;
+        cancelAnimationFrame(this.generationFrame); this.generationFrame = 0;
+      }
       this.stopAttempt(); this.state = STATES.PAUSED;
       this.unwatch?.(); this.unwatch = null;
       this.update(message || '窗口已变化，请刷新地图');
@@ -365,6 +381,7 @@
         try { globalThis.chrome?.runtime?.sendMessage(pending.message)?.catch?.(() => {}); } catch { /* Extension reloaded. */ }
       }
       this.captureAbort?.abort(); this.captureAbort = null;
+      this.generationAbort?.abort(); this.generationAbort = null;
       this.events.abort(); this.unwatch?.(); this.unwatch = null;
       cancelAnimationFrame(this.frame); cancelAnimationFrame(this.generationFrame);
       const restoreFocus = document.activeElement === this.overlay.host;

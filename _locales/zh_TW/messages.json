@@ -1,0 +1,5 @@
+{
+  "extensionName": { "message": "迷页" },
+  "extensionDescription": { "message": "把当前网页变成火苗探索迷宫。从小火堆出发，引导火苗寻找出口洞口，收集经验泡泡、提升等级；地图与游戏进度均在本地处理。" },
+  "extensionActionTitle": { "message": "迷页 · 点击开始 / 关闭" }
+}

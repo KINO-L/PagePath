@@ -51,6 +51,23 @@ test('gzip map roundtrip survives Chrome JSON serialization with exact typed-arr
   assert.deepEqual(Array.from(decoded.contours.buckets['0,0']), [0, 1, 2, 3]);
 });
 
+test('cooperative map decoding yields to page input, preserves pixels and honors cancellation', async () => {
+  let yields = 0, controller = new AbortController(), cancelAfter = Infinity;
+  const local = vm.createContext({ CompressionStream, DecompressionStream, ReadableStream, TextEncoder, atob, btoa,
+    setTimeout(callback) { return setTimeout(() => { if (++yields >= cancelAfter) controller.abort(); callback(); }, 0); } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/content/mapCodec.js'), 'utf8'), local);
+  const source = fixture(513, 513), packet = await codec.encode(source);
+  const decoded = await local.__PAGEPATH__.MapCodec.decode(packet, { signal: controller.signal, cooperative: true });
+  assert.ok(yields >= 3, 'base64, pixel validation and contour cache give input a chance to run');
+  for (const field of ['obstacleMask', 'walkableMask', 'distanceMap', 'componentLabels']) {
+    assert.deepEqual(Buffer.from(decoded[field].buffer, decoded[field].byteOffset, decoded[field].byteLength),
+      Buffer.from(source[field].buffer, source[field].byteOffset, source[field].byteLength));
+  }
+  controller = new AbortController(); yields = 0; cancelAfter = 2;
+  await assert.rejects(local.__PAGEPATH__.MapCodec.decode(packet, { signal: controller.signal, cooperative: true }), { name: 'AbortError' });
+  assert.equal(yields, 2, 'aborted decoding does not continue rebuilding a discarded map');
+});
+
 test('invalid packet headers, lengths and damaged gzip fail before a usable map is returned', async () => {
   const packet = await codec.encode(fixture());
   for (const change of [

@@ -92,7 +92,7 @@ function harness(rects = [], pixelAnalysis = null) {
       return stop;
     },
   };
-  P.LevelGenerator = { generate(_analysis, _reserved, _random, history) {
+  P.MazeClient = { async generate(_snapshot, _reserved, history) {
     generationCount++;
     generatedHistories.push(JSON.parse(JSON.stringify(history)));
     level.difficulty = (generationCount * 23) % 100;
@@ -119,7 +119,7 @@ function harness(rects = [], pixelAnalysis = null) {
     return { clientX: x, clientY: y, button: 0, buttons: 1, isPrimary: true,
       pointerId: 1, pointerType: 'mouse', preventDefault() {}, stopPropagation() {}, ...extras };
   }
-  function ready() { game.start(); paint(); paint(); assert.equal(game.state, P.States.READY); }
+  async function ready() { game.start(); paint(); paint(); await flush(); assert.equal(game.state, P.States.READY); }
   function down(x = level.nodes[0].x, y = level.nodes[0].y, extras) { game.pointerDown(pointer(x, y, extras)); }
   function move(x, y, extras) { game.pointerMove(pointer(x, y, { buttons: 0, ...extras })); }
   return { P, context, game, level, analysis, frames, timers, document, window, targets, generatedHistories,
@@ -131,9 +131,16 @@ function harness(rects = [], pixelAnalysis = null) {
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function complete(h) { h.down(); h.move(240, 80); h.move(240, 240); }
+function holdGenerations(h) {
+  const requests = [];
+  h.P.MazeClient.generate = (snapshot, reserved, history, { signal }) => new Promise((resolve, reject) => {
+    requests.push({ snapshot, reserved, history: JSON.parse(JSON.stringify(history)), signal, resolve, reject });
+  });
+  return requests;
+}
 
 test('mouse starts with a click, moves after release, finishes and persists one score', async () => {
-  const h = harness(); h.ready(); h.down();
+  const h = harness(); await h.ready(); h.down();
   h.game.pointerUp(h.pointer(80, 80, { buttons: 0 }));
   assert.equal(h.game.state, 'DRAWING'); assert.equal(h.game.overlay.surface.captures.size, 0);
   h.move(240, 80); h.move(240, 240);
@@ -163,7 +170,7 @@ test('swept movement collects bubbles once and completion multiplies difficulty 
     { id: 'xp-1', kind: 'xp', x: 205, y: 80, value: 40, radius: 10 },
     { id: 'multiplier-0', kind: 'multiplier', x: 240, y: 150, value: 3, radius: 10 },
   ];
-  h.ready(); h.down(); h.move(220, 80);
+  await h.ready(); h.down(); h.move(220, 80);
   assert.equal(h.game.run.collectedXp, 50); assert.equal(h.game.run.collectedCount, 2);
   assert.equal(h.game.profile.totalXp, 0, 'collection is awarded only after reaching the finish');
   h.move(100, 80); h.move(240, 80);
@@ -181,10 +188,10 @@ test('swept movement collects bubbles once and completion multiplies difficulty 
   h.game.destroy();
 });
 
-test('bubbles across a wall cannot be collected even within pickup radius', () => {
+test('bubbles across a wall cannot be collected even within pickup radius', async () => {
   const h = harness([{ x: 150, y: 82, width: 70, height: 2 }]);
   h.level.collectibles = [{ id: 'xp-0', kind: 'xp', x: 190, y: 88, value: 40, radius: 10 }];
-  h.ready(); h.down(); h.move(240, 80);
+  await h.ready(); h.down(); h.move(240, 80);
   assert.equal(h.game.state, 'DRAWING'); assert.equal(h.game.run.collectedXp, 0);
   assert.equal(h.game.run.collectedIds.length, 0);
   h.game.destroy();
@@ -193,7 +200,7 @@ test('bubbles across a wall cannot be collected even within pickup radius', () =
 test('failure and same-map retry restore bubbles and reset the attempt bonus without changing difficulty', async () => {
   const h = harness();
   h.level.collectibles = [{ id: 'xp-0', kind: 'xp', x: 135, y: 80, value: 20, radius: 10 }];
-  h.ready(); const difficulty = h.level.difficulty;
+  await h.ready(); const difficulty = h.level.difficulty;
   h.down(); h.move(180, 80); assert.equal(h.game.run.collectedXp, 20);
   h.game.fail('collision'); assert.equal(h.game.profile.totalXp, 0);
   h.runTimers(); assert.equal(h.game.state, 'READY');
@@ -208,19 +215,19 @@ test('failure and same-map retry restore bubbles and reset the attempt bonus wit
 });
 
 test('same map practice cannot award experience a second time', async () => {
-  const h = harness(); h.ready(); complete(h); await flush();
+  const h = harness(); await h.ready(); complete(h); await flush();
   const xp = h.game.profile.totalXp, id = h.game.run.id;
   h.game.retry(); complete(h); await flush();
   assert.equal(h.game.run.id, id); assert.equal(h.game.result.xp, 0);
   assert.equal(h.game.profile.totalXp, xp);
   assert.equal(h.messages.filter(m => m.type === 'PAGEPATH_COMPLETE').length, 1);
-  h.game.generate(); h.paint(); h.paint(); assert.notEqual(h.game.run.id, id);
+  h.game.generate(); h.paint(); h.paint(); await flush(); assert.notEqual(h.game.run.id, id);
   complete(h); await flush(); assert.equal(h.game.profile.wins, 2);
   h.game.destroy();
 });
 
 test('storage failure retries automatically without hiding earned XP or blocking same-map practice', async () => {
-  const h = harness(); h.saveFailures(1); h.ready(); complete(h); await flush();
+  const h = harness(); h.saveFailures(1); await h.ready(); complete(h); await flush();
   const id = h.game.run.id, score = h.game.result.score, xp = h.game.result.xp;
   assert.equal(h.game.result.saveError, undefined); assert.equal(h.game.profile.wins, 1);
   assert.equal(h.game.profile.totalXp, xp);
@@ -237,9 +244,9 @@ test('storage failure retries automatically without hiding earned XP or blocking
 });
 
 test('new maps remain immediately playable while earlier receipts retry and rewards accumulate', async () => {
-  const h = harness(); h.saveFailures(1); h.ready(); complete(h); await flush();
+  const h = harness(); h.saveFailures(1); await h.ready(); complete(h); await flush();
   const id = h.game.run.id, firstXp = h.game.result.xp;
-  h.game.generate(); h.paint(); h.paint();
+  h.game.generate(); h.paint(); h.paint(); await flush();
   assert.equal(h.game.state, 'READY'); assert.notEqual(h.game.run.id, id);
   complete(h); const totalXp = firstXp + h.game.result.xp;
   assert.equal(h.game.profile.wins, 2); assert.equal(h.game.profile.totalXp, totalXp);
@@ -251,13 +258,13 @@ test('new maps remain immediately playable while earlier receipts retry and rewa
 });
 
 test('a hanging request times out for automatic retry and never blocks the next map', async () => {
-  const h = harness(); h.ready(); await flush();
+  const h = harness(); await h.ready(); await flush();
   const send = h.context.chrome.runtime.sendMessage;
   h.context.chrome.runtime.sendMessage = message => message.type === 'PAGEPATH_COMPLETE' ? new Promise(() => {}) : send(message);
   complete(h); const xp = h.game.result.xp;
   h.runTimers(); await flush();
   assert.equal(h.game.profile.totalXp, xp); assert.equal(h.game.result.saveError, undefined);
-  h.game.generate(); h.paint(); h.paint(); assert.equal(h.game.state, 'READY');
+  h.game.generate(); h.paint(); h.paint(); await flush(); assert.equal(h.game.state, 'READY');
   h.context.chrome.runtime.sendMessage = send;
   h.runTimers(); await flush();
   assert.equal(h.stored().totalXp, xp);
@@ -275,9 +282,9 @@ test('a late stored profile is rebased with every optimistic reward and earlier 
     if (message.type === 'PAGEPATH_COMPLETE' && !releaseFirst) return new Promise(resolve => { releaseFirst = () => resolve(response); });
     return response;
   };
-  h.ready(); complete(h); const firstXp = h.game.result.xp;
+  await h.ready(); complete(h); const firstXp = h.game.result.xp;
   await flush();
-  h.game.generate(); h.paint(); h.paint(); complete(h);
+  h.game.generate(); h.paint(); h.paint(); await flush(); complete(h);
   const totalXp = 400 + firstXp + h.game.result.xp;
   releaseProfile({ ok: true, profile: h.P.Progression.view(baseline), profileData: baseline });
   await flush();
@@ -295,8 +302,8 @@ test('a stale initial profile response cannot replace experience confirmed by su
   let release;
   h.context.chrome.runtime.sendMessage = message => message.type === 'PAGEPATH_PROFILE'
     ? new Promise(resolve => { release = resolve; }) : send(message);
-  h.ready(); complete(h); await flush();
-  h.game.generate(); h.paint(); h.paint(); complete(h); await flush();
+  await h.ready(); complete(h); await flush();
+  h.game.generate(); h.paint(); h.paint(); await flush(); complete(h); await flush();
   const totalXp = h.game.profile.totalXp;
   release({ ok: true, profile: h.P.Progression.view(h.P.Progression.empty()), profileData: h.P.Progression.empty() });
   await flush();
@@ -313,7 +320,7 @@ test('a lost acknowledgement retries idempotently without changing first-win XP 
     if (message.type === 'PAGEPATH_COMPLETE' && !lost) { lost = true; throw new Error('response lost after persistence'); }
     return response;
   };
-  h.ready(); complete(h); const xp = h.game.result.xp;
+  await h.ready(); complete(h); const xp = h.game.result.xp;
   await flush();
   assert.equal(h.stored().totalXp, xp);
   h.runTimers(); await flush();
@@ -334,8 +341,8 @@ test('closing transfers pending maps to the worker and clears timers while in-fl
     });
     return send(message);
   };
-  h.ready(); complete(h); const firstXp = h.game.result.xp;
-  h.game.generate(); h.paint(); h.paint(); complete(h);
+  await h.ready(); complete(h); const firstXp = h.game.result.xp;
+  h.game.generate(); h.paint(); h.paint(); await flush(); complete(h);
   const totalXp = firstXp + h.game.result.xp;
   assert.equal(h.game.pendingSettlements.length, 2);
   h.game.destroy();
@@ -347,27 +354,27 @@ test('closing transfers pending maps to the worker and clears timers while in-fl
   assert.equal(h.timers.size, 0);
 });
 
-test('collision blocks fast movement before reaching a finish, including through a wall', () => {
+test('collision blocks fast movement before reaching a finish, including through a wall', async () => {
   const h = harness([{ x: 150, y: 0, width: 8, height: 600 }]);
-  h.ready(); h.down(); h.move(240, 240);
+  await h.ready(); h.down(); h.move(240, 240);
   assert.equal(h.game.state, 'FAILED'); assert.equal(h.game.pointerId, null);
   assert.equal(h.messages.filter(m => m.type === 'PAGEPATH_COMPLETE').length, 0);
   h.runTimers(); assert.equal(h.game.state, 'READY'); h.game.destroy();
 });
 
-test('coalesced mouse samples cannot skip a collision in the middle of a movement', () => {
+test('coalesced mouse samples cannot skip a collision in the middle of a movement', async () => {
   const h = harness([{ x: 100, y: 100, width: 30, height: 30 }]);
-  h.ready(); h.down();
+  await h.ready(); h.down();
   h.move(240, 80, { getCoalescedEvents: () => [{ clientX: 110, clientY: 110 }, { clientX: 240, clientY: 80 }] });
   assert.equal(h.game.state, 'FAILED'); h.game.destroy();
 });
 
-test('a new random map shares the screenshot and updates the displayed stars without a mode selector', () => {
-  const h = harness(); h.ready(); const snapshot = h.game.snapshot;
+test('a new random map shares the screenshot and updates the displayed stars without a mode selector', async () => {
+  const h = harness(); await h.ready(); const snapshot = h.game.snapshot;
   const stars = h.game.overlay.lastUpdate.stars;
   assert.equal(h.game.setMode, undefined);
   assert.equal(h.game.overlay.callbacks.onModeChange, undefined);
-  h.game.generate(); h.paint(); h.paint();
+  h.game.generate(); h.paint(); h.paint(); await flush();
   assert.notEqual(h.game.overlay.lastUpdate.stars, stars);
   assert.equal(h.game.overlay.lastUpdate.stars, h.game.level.stars);
   assert.equal(h.game.snapshot, snapshot); assert.equal(h.game.level.nodes.length, 2);
@@ -377,9 +384,9 @@ test('a new random map shares the screenshot and updates the displayed stars wit
   h.game.destroy();
 });
 
-test('right click and Escape restore normal interaction and dispose listeners and retry timers', () => {
+test('right click and Escape restore normal interaction and dispose listeners and retry timers', async () => {
   for (const exit of ['right', 'escape']) {
-    const h = harness(); h.ready(); h.down();
+    const h = harness(); await h.ready(); h.down();
     const event = { preventDefault() {}, stopImmediatePropagation() {}, key: 'Escape' };
     if (exit === 'right') h.game.overlay.host.dispatch('contextmenu', event);
     else h.window.dispatch('keydown', event);
@@ -389,8 +396,8 @@ test('right click and Escape restore normal interaction and dispose listeners an
   }
 });
 
-test('focus loss pauses the attempt without awarding experience', () => {
-  const h = harness(); h.ready(); h.down();
+test('focus loss pauses the attempt without awarding experience', async () => {
+  const h = harness(); await h.ready(); h.down();
   h.window.dispatch('blur'); assert.equal(h.game.state, 'PAUSED');
   assert.equal(h.game.profile.totalXp, 0);
   assert.equal(h.game.pointerId, null); h.move(240, 240); assert.equal(h.game.state, 'PAUSED');
@@ -399,9 +406,10 @@ test('focus loss pauses the attempt without awarding experience', () => {
 
 test('a destroyed capture cannot resurrect a game or leave its screenshot alive', async () => {
   const h = harness(); h.game.snapshot = null;
-  let resolveCapture, released = 0;
-  h.P.PageSnapshot.capture = () => new Promise(resolve => { resolveCapture = resolve; });
+  let resolveCapture, signal, released = 0;
+  h.P.PageSnapshot.capture = options => new Promise(resolve => { resolveCapture = resolve; signal = options.signal; });
   h.game.start(); h.paint(); h.paint(); h.game.destroy();
+  assert.equal(signal.aborted, true, 'closing cancels screenshot work immediately');
   resolveCapture({ image: {}, analysis: h.analysis, destroy() { released++; } }); await flush();
   assert.equal(h.game.state, 'DESTROYED'); assert.equal(released, 1); assert.equal(h.game.level, null);
 });
@@ -412,5 +420,98 @@ test('capture errors release the page and expose a refreshable error state', asy
   h.game.start(); h.paint(); h.paint(); await flush();
   assert.equal(h.game.state, 'PAUSED'); assert.equal(h.game.generationFailed, true);
   assert.match(h.game.overlay.lastUpdate.message, /capture unavailable/); assert.equal(h.game.snapshot, null);
+  h.game.destroy();
+});
+
+test('exit button, Escape and right click cancel a pending map immediately and discard late results', async () => {
+  for (const exit of ['button', 'escape', 'right']) {
+    const h = harness(), requests = holdGenerations(h);
+    let released = 0;
+    h.game.snapshot.destroy = () => { released++; };
+    h.game.start(); h.paint(); h.paint();
+    assert.equal(h.game.state, 'GENERATING'); assert.equal(requests.length, 1);
+    assert.equal(requests[0].signal.aborted, false);
+    assert.equal(requests[0].snapshot, h.game.snapshot, 'the client receives the cached screenshot');
+    const event = { preventDefault() {}, stopImmediatePropagation() {}, key: 'Escape' };
+    if (exit === 'button') h.game.overlay.callbacks.onExit();
+    else if (exit === 'right') h.game.overlay.host.dispatch('contextmenu', event);
+    else h.window.dispatch('keydown', event);
+    assert.equal(h.game.state, 'DESTROYED', exit + ': closing never waits for generation');
+    assert.equal(requests[0].signal.aborted, true, exit + ': worker work is cancelled immediately');
+    assert.equal(h.game.overlay.destroyed, true); assert.equal(released, 1);
+    assert.equal(h.frames.size, 0); assert.equal(h.timers.size, 0);
+    assert.ok(h.targets.every(target => [...target.events.values()].every(list => list.size === 0)));
+    requests[0].resolve(h.level); await flush();
+    assert.equal(h.game.state, 'DESTROYED'); assert.equal(h.game.level, null);
+    assert.equal(h.game.snapshot, null); assert.equal(h.game.run, null);
+    assert.equal(h.game.recentLayouts.length, 0); assert.equal(h.game.profile.totalXp, 0);
+    assert.equal(h.messages.filter(message => message.type === 'PAGEPATH_COMPLETE').length, 0);
+    assert.equal(released, 1, 'a stale map cannot restore or release the screenshot twice');
+  }
+});
+
+test('a replacement generation aborts the previous request and ignores its later completion', async () => {
+  const h = harness(), requests = holdGenerations(h);
+  h.game.start(); h.paint(); h.paint();
+  h.game.generate();
+  assert.equal(requests[0].signal.aborted, true, 'superseding a map aborts it before scheduling another');
+  h.paint(); h.paint(); assert.equal(requests.length, 2);
+  const replacement = { ...h.level, difficulty: 72, stars: 4,
+    nodes: h.level.nodes.map(node => ({ ...node, x: node.x + 30 })) };
+  requests[1].resolve(replacement); await flush();
+  assert.equal(h.game.state, 'READY'); assert.equal(h.game.level, replacement);
+  const currentRun = h.game.run, history = JSON.stringify(h.game.recentLayouts);
+  requests[0].resolve(h.level); await flush();
+  assert.equal(h.game.state, 'READY'); assert.equal(h.game.level, replacement);
+  assert.equal(h.game.run, currentRun); assert.equal(h.game.overlay.level, replacement);
+  assert.equal(JSON.stringify(h.game.recentLayouts), history, 'late results never contaminate map variation history');
+  assert.equal(h.game.profile.totalXp, 0);
+  h.game.destroy();
+});
+
+test('viewport changes abort generation and keep a late result from replacing the paused state', async () => {
+  const h = harness(), requests = holdGenerations(h);
+  h.game.start(); h.paint(); h.paint();
+  h.changeLayout('窗口大小或缩放已变化，请重新生成关卡');
+  assert.equal(h.game.state, 'PAUSED'); assert.equal(requests[0].signal.aborted, true);
+  assert.match(h.game.overlay.lastUpdate.message, /窗口大小或缩放已变化/);
+  assert.equal(h.counts().watchStops, 1);
+  requests[0].resolve(h.level); await flush();
+  assert.equal(h.game.state, 'PAUSED'); assert.equal(h.game.level, null);
+  assert.equal(h.game.run, null); assert.equal(h.game.recentLayouts.length, 0);
+  assert.equal(h.game.profile.totalXp, 0);
+  h.game.destroy();
+});
+
+test('an asynchronous generator failure releases the screenshot and permits a successful refresh', async () => {
+  const h = harness(), requests = holdGenerations(h);
+  let released = 0;
+  h.game.snapshot.destroy = () => { released++; };
+  h.game.start(); h.paint(); h.paint();
+  requests[0].reject(new Error('maze worker unavailable')); await flush();
+  assert.equal(h.game.state, 'PAUSED'); assert.equal(h.game.generationFailed, true);
+  assert.equal(h.game.level, null); assert.equal(h.game.snapshot, null);
+  assert.equal(released, 1); assert.equal(h.counts().watchStops, 1);
+  assert.match(h.game.overlay.lastUpdate.message, /maze worker unavailable/);
+  h.game.overlay.callbacks.onRegenerate(); h.paint(); h.paint(); await flush();
+  assert.equal(h.game.state, 'GENERATING'); assert.equal(requests.length, 2);
+  requests[1].resolve(h.level); await flush();
+  assert.equal(h.game.state, 'READY'); assert.equal(h.game.generationFailed, false);
+  assert.equal(h.game.level, h.level); assert.equal(h.game.profile.totalXp, 0);
+  h.game.destroy();
+});
+
+test('profile loading remains responsive while a map is generating', async () => {
+  const h = harness(), requests = holdGenerations(h);
+  h.seedStored({ totalXp: 15000, totalRuns: 4, totalScore: 8000 });
+  h.game.start(); h.paint(); h.paint(); await flush();
+  assert.equal(h.game.state, 'GENERATING'); assert.equal(h.game.level, null);
+  assert.equal(h.game.profile.totalXp, 15000); assert.equal(h.game.profile.level, 3);
+  assert.equal(h.game.overlay.lastUpdate.state, 'GENERATING');
+  assert.equal(h.game.overlay.lastUpdate.profile.totalXp, 15000);
+  assert.equal(requests[0].signal.aborted, false);
+  requests[0].resolve(h.level); await flush();
+  assert.equal(h.game.state, 'READY'); assert.equal(h.game.profile.totalXp, 15000);
+  assert.equal(h.game.profile.wins, 4, 'map generation itself never awards experience');
   h.game.destroy();
 });
