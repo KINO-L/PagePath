@@ -1,6 +1,6 @@
 {
   "name": "miye",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "private": true,
   "description": "Explore webpage mazes as a tiny flame, from campfire to cave exit, with randomized difficulty, experience bubbles and local progression. A Manifest V3 browser extension.",
   "homepage": "https://github.com/KINO-L/PagePath#readme",

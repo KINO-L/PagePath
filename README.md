@@ -4,9 +4,9 @@
 
 迷页把当前网页变成火苗探索迷宫：页面内容成为障碍，留白成为通道。单击小火堆，带着火苗探索路线，抵达出口洞口后获得积分和升级经验。
 
-**v3.1.0** · 桌面 Chrome / Edge 109+ · 本地运行 · 无需账号
+**v3.1.1** · 桌面 Chrome / Edge 109+ · 本地运行 · 无需账号
 
-[下载 v3.1.0](https://github.com/KINO-L/PagePath/releases/download/v3.1.0/Miye-v3.1.0.zip) · [版本说明](https://github.com/KINO-L/PagePath/releases/tag/v3.1.0) · [更新记录](https://github.com/KINO-L/PagePath/blob/main/CHANGELOG.md)
+[下载 v3.1.1](https://github.com/KINO-L/PagePath/releases/download/v3.1.1/Miye-v3.1.1.zip) · [版本说明](https://github.com/KINO-L/PagePath/releases/tag/v3.1.1) · [更新记录](CHANGELOG.md)
 
 ## 演示
 
@@ -20,18 +20,18 @@ https://github.com/user-attachments/assets/7814acc1-fbf0-4e1c-a8b8-459333102b93
 - **探索与成长**：通道中藏有靠近才显现的经验泡泡，每图必有一个随机倍率泡泡，持续显示柔和呼吸光。得分由迷宫实际难度决定，通关经验结合收集奖励和倍率计算，立即计入等级并自动保存。
 - **火苗探索**：从小火堆出发，带着温暖的小火苗和短火星尾迹寻找出口洞口。启动时定格网页，悬浮栏可拖动，探索时自动折叠。
 - **后台生成**：迷宫计算在独立线程运行，悬浮栏显示加载转圈，生成期间也可右键、按 Esc 或点击退出，立即停止本次生成。
-- **多语言**：简体中文、日文和英文，自动跟随浏览器界面语言；其他语言默认使用英文。品牌名统一为「迷页」。
+- **多语言**：名称与界面自动跟随浏览器界面语言：中文「迷页」、日文「迷いページ」、英文「PageWander」；其他语言默认使用英文。
 
 ## 安装
 
-1. 下载 [Miye-v3.1.0.zip](https://github.com/KINO-L/PagePath/releases/download/v3.1.0/Miye-v3.1.0.zip) 并解压，也可克隆本仓库。
+1. 下载并解压 [Miye-v3.1.1.zip](https://github.com/KINO-L/PagePath/releases/download/v3.1.1/Miye-v3.1.1.zip)，也可克隆本仓库。
 2. 打开 `chrome://extensions` 或 `edge://extensions`，开启「开发者模式」。
 3. 选择「加载已解压的扩展程序」，选中包含 `manifest.json` 的目录。
 4. 打开普通网页，点击迷页图标开始。
 
 保留安装目录；浏览器不能直接加载 ZIP。使用扩展无需 Node.js 或构建步骤。
 
-更新时退出游戏，用新版本替换原安装目录的文件，在扩展管理页点击「重新加载」，再刷新网页。v3.1.0 需要 Chrome / Edge 109+，新增 `offscreen` 权限承载扩展内部的本地计算线程；如浏览器提示权限变更，确认后重新启用扩展。
+更新时退出游戏，用新版本替换原安装目录的文件，在扩展管理页点击「重新加载」，再刷新网页。需要 Chrome / Edge 109+；从 v3.1.0 起使用 `offscreen` 权限承载扩展内部的本地计算线程，如浏览器提示权限变更，确认后重新启用扩展。
 
 已有累计经验、成绩与结算记录保留，等级按新的五级曲线重新计算。请保留同一安装目录和扩展安装，避免卸载清除本地进度。
 

@@ -51,7 +51,7 @@ test('every UI and player-facing error key has complete translations and matchin
       const value = I18n.t(key);
       assert.ok(value.length > 0, `${language}: ${key}`);
       assert.deepEqual(placeholders(value), placeholders(key), `${language}: ${key}`);
-      if (language === 'en') assert.doesNotMatch(value.replaceAll('迷页', ''), /\p{Script=Han}/u, key);
+      if (language === 'en') assert.doesNotMatch(value, /\p{Script=Han}/u, key);
       if (language === 'zh-CN') assert.equal(value, key);
     }
   }

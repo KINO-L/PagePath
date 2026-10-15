@@ -142,7 +142,7 @@ async function checkLanguages(browser, errors) {
           assert.ok(view.controls.every(control => control.name && control.title), label + ': controls retain accessible names and tooltips');
           assert.equal(view.collection, view.expectedCollection, label + ': collection number uses the selected locale');
           if (state === 'SUCCESS') assert.equal(view.xp, view.expectedXp, label + ': settlement number uses the selected locale');
-          if (scenario.expected === 'en') assert.doesNotMatch(view.allUiText.replaceAll('迷页', ''), /[\u3400-\u9fff]/u, label + ': English UI has no untranslated Chinese apart from the brand name');
+          if (scenario.expected === 'en') assert.doesNotMatch(view.allUiText, /[\u3400-\u9fff]/u, label + ': English UI has no untranslated Chinese');
           cases++;
         }
       }

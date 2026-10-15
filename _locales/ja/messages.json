@@ -1,5 +1,5 @@
 {
-  "extensionName": { "message": "迷页" },
+  "extensionName": { "message": "迷いページ" },
   "extensionDescription": { "message": "ウェブページが炎の探索迷路に。小さな焚き火から出発し、炎を出口の洞窟へ導き、経験値バブルを集めてレベルアップ。マップと進行状況は端末内で処理されます。" },
-  "extensionActionTitle": { "message": "迷页 · クリックで開始 / 終了" }
+  "extensionActionTitle": { "message": "迷いページ · クリックで開始 / 終了" }
 }

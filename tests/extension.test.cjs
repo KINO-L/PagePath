@@ -133,10 +133,12 @@ test('extension metadata has complete English, Japanese and Simplified Chinese t
   assert.equal(manifest.default_locale, 'en');
   const fields = [manifest.name, manifest.description, manifest.action.default_title];
   assert.ok(fields.every(value => /^__MSG_\w+__$/.test(value)));
-  for (const locale of ['en', 'ja', 'zh_CN']) {
+  for (const [locale, brand] of [['en', 'PageWander'], ['ja', '迷いページ'], ['zh_CN', '迷页']]) {
     const messages = JSON.parse(fs.readFileSync(path.join(root, `_locales/${locale}/messages.json`), 'utf8'));
     for (const value of fields) assert.ok(messages[value.slice(6, -2)]?.message.trim(), `${locale}: ${value}`);
     assert.ok(messages.extensionDescription.message.length <= 132, `${locale}: Chrome description limit`);
+    assert.equal(messages.extensionName.message, brand);
+    assert.equal(worker({}, {}, locale.replace('_', '-')).P.I18n.t('迷页'), brand);
     if (locale === 'en') assert.doesNotMatch(messages.extensionDescription.message, /[\u3400-\u9fff]/);
   }
   assert.deepEqual(
@@ -152,7 +154,7 @@ test('restricted-page popup loads CSP-safe scripts and follows the browser UI la
   assert.equal((html.match(/<script\b/g) || []).length, scripts.length, 'no inline script');
   for (const [locale, expectedLang] of [['zh-CN', 'zh-CN'], ['ja-JP', 'ja'], ['en-US', 'en'], ['fr-FR', 'en']]) {
     const elements = [...html.matchAll(/data-i18n="([^"]+)"/g)].map(match => ({ dataset: { i18n: match[1] }, textContent: '' }));
-    assert.equal(elements.length, 4);
+    assert.equal(elements.length, 6);
     const document = { documentElement: { lang: '' }, querySelectorAll: () => elements };
     const context = vm.createContext({ document, chrome: { i18n: { getUILanguage: () => locale } } });
     for (const file of scripts) vm.runInContext(fs.readFileSync(path.join(root, 'src', file), 'utf8'), context);
@@ -161,7 +163,7 @@ test('restricted-page popup loads CSP-safe scripts and follows the browser UI la
       assert.ok(element.textContent.trim());
       if (expectedLang === 'zh-CN') assert.equal(element.textContent, element.dataset.i18n);
       else assert.notEqual(element.textContent, element.dataset.i18n, `${locale}: ${element.dataset.i18n}`);
-      if (expectedLang === 'en') assert.doesNotMatch(element.textContent.replaceAll('迷页', ''), /[\u3400-\u9fff]/);
+      if (expectedLang === 'en') assert.doesNotMatch(element.textContent, /[\u3400-\u9fff]/);
     }
   }
 });

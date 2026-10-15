@@ -1,6 +1,6 @@
 # 隐私说明
 
-本说明适用于迷页 v3.1.0，更新于 2026-10-15。
+本说明适用于迷页（PageWander / 迷いページ）v3.1.1，更新于 2026-10-15。
 
 ## 网页数据的本地处理
 
@@ -38,3 +38,31 @@ DOM 辅助几何仅在截图时采集并合入地图；同一截图换图复用�
 ## 反馈
 
 隐私相关问题可以通过 [项目 Issues](https://github.com/KINO-L/PagePath/issues) 反馈。Issue 内容由你主动提交给 GitHub，请勿上传包含私人信息的网页截图或页面内容。
+
+## English
+
+This policy covers PageWander (迷页 / 迷いページ) v3.1.1. Updated October 15, 2026.
+
+When you click the extension icon, PageWander captures the visible page and analyzes its pixels locally to generate a maze. It also inspects the type, visibility, styles, geometry, and text emptiness or length of compact page elements. Only geometry and shape information from that inspection is passed to the extension background. The current page URL is used temporarily to check that the page has not changed during capture; browsing history is not accessed.
+
+Screenshots, maps, routes and pointer positions stay in browser memory. They are not uploaded or saved as browsing records. Exiting the game releases the current game data. Bundled OpenCV code and its runtime may remain in memory until the browser releases the extension background. The extension makes no external network requests and has no accounts, advertising, analytics or cloud synchronization. The original website may continue its own scripts, audio, video and network activity while the game shows a static snapshot.
+
+Local extension storage keeps accumulated XP, scores, completion counts, a high score and up to 128 recent reward records containing random game identifiers and reward values. Pending rewards may remain in session storage until saved. These records contain no page URLs, screenshots, page text, mouse trails or account identifiers. Progress remains until the extension's data is cleared or the extension is uninstalled.
+
+Permissions are limited to `activeTab` for user-initiated page access and capture, `scripting` for the game interface and local obstacle analysis, `storage` for progress, and `offscreen` for a cancellable local maze-generation worker. No permanent access to every website is requested.
+
+For privacy questions, use [project Issues](https://github.com/KINO-L/PagePath/issues). Information you voluntarily submit there is handled by GitHub; do not post private page contents or screenshots.
+
+## 日本語
+
+この方針は迷いページ（迷页 / PageWander）v3.1.1に適用されます。更新日：2026年10月15日。
+
+拡張機能のアイコンをクリックすると、表示中のページを撮影し、端末内で画像を解析して迷路を生成します。小さなページ要素について、種類、表示状態、スタイル、形状、文字の有無や長さも確認します。この確認結果のうち、拡張機能のバックグラウンドに渡すのは位置や形状に関する情報のみです。現在のURLは撮影中のページ変更を確認するため一時的に使用し、閲覧履歴は読み取りません。
+
+スクリーンショット、マップ、経路、ポインター位置はブラウザーのメモリー内で処理し、アップロードしたり閲覧記録として保存したりしません。終了すると本局のデータを解放します。同梱のOpenCVとその実行用メモリーは、ブラウザーがバックグラウンドを終了するまで残る場合があります。拡張機能から外部への通信、アカウント登録、広告、アクセス解析、クラウド同期はありません。元のウェブサイト自身のスクリプト、音声、動画や通信は、ゲーム中も動作する場合があります。
+
+拡張機能のローカルストレージには、累計経験値、スコア、クリア回数、最高スコアと、ランダムな局次IDや報酬値からなる最大128件の報酬記録を保存します。保存待ちの報酬をセッションストレージに一時保持する場合があります。これらにURL、スクリーンショット、ページの文章、マウスの軌跡、アカウント識別子は含まれません。進行状況は、拡張機能のデータを消去するかアンインストールするまで保存されます。
+
+使用する権限は、ユーザー操作後のページアクセスと撮影のための`activeTab`、ゲーム表示と障害物解析のための`scripting`、進行状況保存のための`storage`、中止可能なローカル迷路生成処理のための`offscreen`です。すべてのサイトへの常時アクセス権限は求めません。
+
+お問い合わせは[プロジェクトのIssues](https://github.com/KINO-L/PagePath/issues)をご利用ください。自分で投稿した情報はGitHub側で処理されます。個人情報を含むページ内容やスクリーンショットは投稿しないでください。

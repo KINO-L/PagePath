@@ -1,6 +1,6 @@
 # 开发指南
 
-迷页 v3.1.0 使用原生 JavaScript、SVG、OpenCV.js / WASM 和 Manifest V3，需要 Chrome / Edge 109+。扩展可直接加载，无构建步骤；Node.js 与 Playwright 用于开发和测试。
+迷页 v3.1.1 使用原生 JavaScript、SVG、OpenCV.js / WASM 和 Manifest V3，需要 Chrome / Edge 109+。扩展可直接加载，无构建步骤；Node.js 与 Playwright 用于开发和测试。
 
 ## 本地环境
 
@@ -110,4 +110,4 @@ MV3 测试使用临时浏览器配置与 CDP `Extensions.triggerAction`，需要
 ./scripts/package.ps1
 ```
 
-脚本按 manifest 版本生成 `dist/Miye-v<版本号>.zip`，本版为 `dist/Miye-v3.1.0.zip`。开发时可开启 `DEBUG` 查看地图分析图层，测试夹具不要包含私人网页内容。
+脚本按 manifest 版本生成 `dist/Miye-v<版本号>.zip`，本版为 `dist/Miye-v3.1.1.zip`。开发时可开启 `DEBUG` 查看地图分析图层，测试夹具不要包含私人网页内容。
