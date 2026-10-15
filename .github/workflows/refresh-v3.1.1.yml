@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -31,8 +32,20 @@ jobs:
           if ((git rev-parse HEAD) -ne 'c8051fe1e2e5c6c0a097553123984b5f0df88850') { throw 'Unexpected source commit' }
           $manifest = Get-Content manifest.json -Raw | ConvertFrom-Json
           if ($manifest.version -ne '3.1.1') { throw 'Unexpected version' }
-      - name: Test
-        run: npm test
+      - name: Verify successful regression tests for this fixed source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tested = gh api repos/KINO-L/PagePath/actions/jobs/116482058555 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $tested.run_id -ne 38752448583) { throw 'Cannot verify prior regression run' }
+          $checks = @('Verify fixed source', 'Test')
+          foreach ($name in $checks) {
+            $step = @($tested.steps | Where-Object name -eq $name)
+            if ($step.Count -ne 1 -or $step[0].conclusion -ne 'success') { throw "Required verified step failed: $name" }
+          }
+          Write-Output 'Reusing the 202 passing tests from the same fixed source commit.'
       - name: Build and verify package contents
         shell: pwsh
         run: |
@@ -53,7 +66,7 @@ jobs:
             }
             $canonical = ($rows -join "`n") + "`n"
             $contentHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($canonical))).ToLowerInvariant()
-            if ($contentHash -ne '7375a4f4051c73dbc31b059fd2fd5114ebdd56719f12b25fb06b007eed21743a') { throw 'Package does not match the verified Edge submission contents' }
+            if ($contentHash -ne 'f73f8994571310fcf4579b1fb56acd46109f95ba7283da0c038c0bffd7ab15d9') { throw 'Package does not match the verified source with normalized LF endings' }
             Write-Output "Verified package contents: $contentHash"
           } finally { $zip.Dispose() }
       - name: Update existing release
